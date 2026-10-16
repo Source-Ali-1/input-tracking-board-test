@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Input Tracking Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one working column. Board = ranked roster; member view = the weekly sheet (section rows, Mon-Sun inputs, total, progress, result). */
+:root {
+  --bg: #F2F4F8;
+  --surface: #FFFFFF;
+  --ink: #131926;
+  --muted: #5A6476;
+  --line: #DCE1EA;
+  --accent: #2B55E0;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #E4EAFC;
+  --win: #1D7F53;
+  --win-soft: #DCF2E6;
+  --miss: #BD3E2A;
+  --miss-soft: #FAE3DE;
+  --cat: #161C29;
+  --cat-ink: #F4F6FA;
+  --today: #F7F9FF;
+  --track: #E6EAF1;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Figtree", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D1118; --surface: #151A24; --ink: #E6EAF1; --muted: #98A2B4; --line: #283041;
+    --accent: #7D9BFF; --accent-ink: #0D1118; --accent-soft: #1C2747;
+    --win: #4FC48C; --win-soft: #12301F; --miss: #F07B67; --miss-soft: #3A1B16;
+    --cat: #242C3C; --cat-ink: #E6EAF1; --today: #18203A; --track: #232A38;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D1118; --surface: #151A24; --ink: #E6EAF1; --muted: #98A2B4; --line: #283041;
+  --accent: #7D9BFF; --accent-ink: #0D1118; --accent-soft: #1C2747;
+  --win: #4FC48C; --win-soft: #12301F; --miss: #F07B67; --miss-soft: #3A1B16;
+  --cat: #242C3C; --cat-ink: #E6EAF1; --today: #18203A; --track: #232A38;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+.app { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; display: grid; gap: 22px; }
+h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h1 { font-size: clamp(1.6rem, 3.6vw, 2.2rem); font-weight: 800; }
+h2 { font-size: 1.35rem; font-weight: 800; }
+p { margin: 0; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn { border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.ghost:hover { color: var(--ink); }
+.btn.danger { color: var(--miss); }
+.btn.danger.armed { background: var(--miss); color: var(--surface); border-color: var(--miss); }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* Header */
+.top { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end; justify-content: space-between; }
+.brand { display: grid; gap: 4px; min-width: 0; }
+.brand p { color: var(--muted); max-width: 52ch; }
+.weeknav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.weeknav .arrow { width: 36px; height: 36px; padding: 0; justify-content: center; font-size: 1.1rem; }
+.weeklabel { min-width: 13.5em; text-align: center; display: grid; line-height: 1.25; }
+.weeklabel strong { font-family: var(--display); font-size: 1.05rem; }
+.weeklabel span { font-size: 0.78rem; color: var(--muted); }
+
+.banner { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 12px 16px; color: var(--muted); }
+
+/* Board */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.board-head { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+.stats { display: flex; gap: 28px; flex-wrap: wrap; }
+.stat { display: grid; }
+.stat b { font-family: var(--mono); font-size: 1.35rem; font-weight: 600; }
+.stat span { font-size: 0.78rem; color: var(--muted); }
+.roster { list-style: none; margin: 0; padding: 0; }
+.roster li + li { border-top: 1px solid var(--line); }
+.row { width: 100%; display: grid; grid-template-columns: 2.2rem minmax(0, 1.4fr) minmax(0, 2fr) auto; gap: 16px; align-items: center; padding: 16px 22px; background: none; border: 0; text-align: left; }
+.row:hover { background: var(--today); }
+.rank { font-family: var(--mono); color: var(--muted); font-size: 0.85rem; }
+.who { display: grid; min-width: 0; }
+.who strong { font-size: 1.02rem; overflow-wrap: anywhere; }
+.who span { font-size: 0.8rem; color: var(--muted); }
+.chip { display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: 2px; }
+.meter { display: grid; gap: 6px; min-width: 0; }
+.bar { height: 8px; border-radius: 99px; background: var(--track); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .3s ease; }
+.bar.done i { background: var(--win); }
+.meter small { font-size: 0.78rem; color: var(--muted); }
+.pct { font-family: var(--mono); font-weight: 600; font-size: 1.15rem; min-width: 3.5em; text-align: right; }
+.empty { padding: 44px 22px; text-align: center; display: grid; gap: 10px; justify-items: center; color: var(--muted); }
+.empty strong { color: var(--ink); font-family: var(--display); font-size: 1.15rem; }
+
+/* Add form */
+.addform { padding: 20px 22px; border-bottom: 1px solid var(--line); display: grid; gap: 14px; background: var(--today); }
+.field { display: grid; gap: 6px; }
+.field label, .legend { font-size: 0.82rem; font-weight: 600; }
+.input { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 9px 12px; width: 100%; }
+.input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.choice { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.choice input { margin-top: 4px; accent-color: var(--accent); }
+.choice span { display: grid; }
+.choice small { color: var(--muted); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Member view */
+.member-head { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; justify-content: space-between; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+.member-title { display: grid; gap: 2px; min-width: 0; }
+.member-title h2 { overflow-wrap: anywhere; }
+.scorebox { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+.bigpct { font-family: var(--mono); font-size: 2rem; font-weight: 600; line-height: 1; }
+.scorebox .bar { width: 160px; }
+
+.grid-wrap { overflow-x: auto; }
+table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size: 0.9rem; }
+.grid th, .grid td { border-bottom: 1px solid var(--line); padding: 0; text-align: center; vertical-align: middle; }
+.grid thead th { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 10px 6px; background: var(--surface); }
+.grid thead th.today { color: var(--accent); }
+.grid thead th small { display: block; font-family: var(--mono); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.grid .taskcol { text-align: left; padding: 10px 14px 10px 22px; position: sticky; left: 0; background: var(--surface); z-index: 1; min-width: 230px; max-width: 280px; }
+.grid td.taskcol { font-weight: 600; }
+.grid td.taskcol small { display: block; color: var(--muted); font-weight: 400; font-size: 0.78rem; }
+.grid tr.cat td { background: var(--cat); color: var(--cat-ink); font-weight: 700; font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; text-align: left; padding: 7px 22px; }
+.grid tr.cat td.taskcol { background: var(--cat); }
+.grid td.kpi { font-family: var(--mono); color: var(--muted); padding: 0 8px; white-space: nowrap; }
+.grid td.day { width: 64px; }
+.grid td.day.today { background: var(--today); }
+.cell { width: 100%; height: 42px; border: 0; background: transparent; text-align: center; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.cell:focus { outline: none; box-shadow: inset 0 0 0 2px var(--accent); background: var(--surface); }
+.cell::placeholder { color: var(--line); }
+.cell[readonly] { cursor: default; }
+.tick { width: 26px; height: 26px; border-radius: 7px; border: 1.5px solid var(--line); background: var(--surface); display: inline-grid; place-items: center; padding: 0; }
+.tick[aria-pressed="true"] { background: var(--win); border-color: var(--win); color: var(--surface); }
+.tick svg { width: 14px; height: 14px; }
+.tick[aria-pressed="false"] svg { visibility: hidden; }
+.grid td.total { font-family: var(--mono); font-weight: 600; padding: 0 10px; }
+.grid td.prog { padding: 0 12px; min-width: 120px; }
+.grid td.prog .bar { height: 6px; }
+.grid td.prog small { display: block; font-family: var(--mono); font-size: 0.75rem; color: var(--muted); margin-top: 3px; }
+.grid td.result { padding: 0 14px 0 6px; min-width: 96px; }
+.pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
+.pill.win { background: var(--win-soft); color: var(--win); }
+.pill.loss { background: var(--miss-soft); color: var(--miss); }
+.pill.open { background: var(--track); color: var(--muted); font-weight: 600; }
+.foot { padding: 14px 22px; color: var(--muted); font-size: 0.82rem; display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: space-between; }
+
+/* Setup editor */
+.editor { padding: 20px 22px; display: grid; gap: 20px; }
+.editor .note { color: var(--muted); font-size: 0.86rem; max-width: 70ch; }
+.catblock { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.cathead { display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: var(--cat); }
+.cathead .input { background: transparent; border-color: transparent; color: var(--cat-ink); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.85rem; }
+.cathead .input:focus { border-color: var(--cat-ink); box-shadow: none; }
+.cathead .btn { background: transparent; color: var(--cat-ink); border-color: transparent; }
+.taskrows { display: grid; }
+.taskrow { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr) 90px minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; align-items: end; border-bottom: 1px solid var(--line); }
+.taskrow .field label { font-size: 0.72rem; color: var(--muted); font-weight: 600; }
+.addtask { padding: 10px 12px; }
+.editor-actions { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 18px; }
+
+.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 0.88rem; font-weight: 600; max-width: calc(100% - 32px); }
+.saving { font-size: 0.78rem; color: var(--muted); }
+
+@media (max-width: 720px) {
+  .app { padding: 20px 16px 56px; }
+  .row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; padding: 14px 16px; }
+  .row .rank { display: none; }
+  .row .meter { grid-column: 1 / -1; grid-row: 2; }
+  .board-head, .member-head, .addform, .editor { padding-inline: 16px; }
+  .grid .taskcol { padding-left: 16px; min-width: 170px; }
+  .taskrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .taskrow .field:first-child { grid-column: 1 / -1; }
+  .weeklabel { min-width: 0; flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .bar i { transition: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <span class="eyebrow">Weekly inputs</span>
+      <h1>Input Tracking Board</h1>
+      <p>Pick the inputs that move your business, set a weekly KPI for each, and log them day by day. Everyone can see the board.</p>
+    </div>
+    <div class="weeknav" aria-label="Week">
+      <button class="btn arrow" id="prevWeek" aria-label="Previous week">&#8249;</button>
+      <div class="weeklabel" id="weekLabel"><strong>&nbsp;</strong><span>&nbsp;</span></div>
+      <button class="btn arrow" id="nextWeek" aria-label="Next week">&#8250;</button>
+      <button class="btn" id="thisWeek">This week</button>
+    </div>
+  </header>
+  <div class="banner" id="banner" hidden></div>
+  <main id="main">
+    <section class="panel"><div class="empty"><strong>Loading the board</strong><p>Members and their weekly inputs appear here once the board connects.</p></div></section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Defaults ----------
+  function uid() { return (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).slice(0, 10); }
+  function businessTemplate() {
+    const cats = [
+      { id: uid(), name: "Sales & pipeline" },
+      { id: uid(), name: "Marketing" },
+      { id: uid(), name: "Delivery & operations" },
+      { id: uid(), name: "Owner habits" }
+    ];
+    const t = (c, name, target, unit, type) => ({ id: uid(), catId: cats[c].id, name, target, unit, type: type || "count" });
+    return {
+      cats,
+      tasks: [
+        t(0, "Outreach messages sent", 100, "messages"),
+        t(0, "Sales calls held", 5, "calls"),
+        t(0, "Proposals sent", 2, "proposals"),
+        t(1, "Content pieces published", 5, "posts"),
+        t(1, "Email sent to your list", 1, "emails"),
+        t(2, "Deep work blocks (90 min)", 10, "blocks"),
+        t(2, "Client check-ins", 5, "check-ins"),
+        t(2, "Process documented or automated", 1, "processes"),
+        t(3, "7+ hours of sleep", 5, "nights", "check"),
+        t(3, "Workouts", 3, "sessions", "check"),
+        t(3, "Reading", 3, "hours")
+      ]
+    };
+  }
+  function blankTemplate() {
+    const c = { id: uid(), name: "My inputs" };
+    return { cats: [c], tasks: [{ id: uid(), catId: c.id, name: "New input", target: 5, unit: "", type: "count" }] };
+  }
+
+  // ---------- Dates ----------
+  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function mondayOf(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); const wd = (x.getDay() + 6) % 7; x.setDate(x.getDate() - wd); return x; }
+  function keyOf(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+  function fromKey(k) { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); }
+  function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  const CURRENT = keyOf(mondayOf(new Date()));
+  function todayIdx(week) { return week === CURRENT ? (new Date().getDay() + 6) % 7 : -1; }
+  function weekRange(week) {
+    const a = fromKey(week), b = addDays(a, 6);
+    const left = MONTHS[a.getMonth()] + " " + a.getDate();
+    const right = (a.getMonth() === b.getMonth() ? "" : MONTHS[b.getMonth()] + " ") + b.getDate();
+    return left + " to " + right + ", " + b.getFullYear();
+  }
+  function weekTense(week) { return week < CURRENT ? "past" : week > CURRENT ? "future" : "current"; }
+
+  // ---------- State ----------
+  let db = true, canWrite = true;
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (_) { return null; } }
+  let boardCode = store("itb.code") || "";
+  let mine = new Set(); try { mine = new Set(JSON.parse(store("itb.mine") || "[]")); } catch (_) {}
+  function markMine(id) { mine.add(id); store("itb.mine", JSON.stringify([...mine])); }
+  let writeEpoch = 0;
+  async function api(method, path, body) {
+    if (method !== "GET") writeEpoch++;
+    const res = await fetch(path, { method, keepalive: method !== "GET", headers: { "Content-Type": "application/json", "X-Board-Code": boardCode }, body: body ? JSON.stringify(body) : undefined });
+    if (method !== "GET") writeEpoch++;
+    if (res.status === 401) { const e = new Error("code"); e.code = "code"; throw e; }
+    if (!res.ok) { const e = new Error("http " + res.status); e.code = "http"; throw e; }
+    return res.json();
+  }
+  let members = new Map();      // id -> member doc
+  let membersLoaded = false;
+  let serverLogs = new Map();   // logId -> log doc (current week)
+  let logsLoaded = false;
+  const local = {};             // logId -> pending local copy
+  const pending = {};           // logId -> write queue state
+  let week = CURRENT;
+  let view = { mode: "board", memberId: null };
+  let showAdd = false;
+  let editing = null;           // draft {name, cats, tasks}
+  let gridSig = "";
+  let deleteArmed = false;
+
+  const $ = (s, r) => (r || document).querySelector(s);
+  const main = $("#main");
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function fmt(n) { return Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10); }
+
+  let toastTimer = null;
+  function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 2600); }
+
+  // ---------- Data helpers ----------
+  const logId = (mid, wk) => mid + "_" + wk;
+  function getLog(mid, wk) { const id = logId(mid, wk); return pending[id] ? local[id] : (serverLogs.get(id) || null); }
+  function setupFor(mid, wk) {
+    const log = getLog(mid, wk), m = members.get(mid);
+    if (log && log.tasks && log.cats) return { cats: log.cats, tasks: log.tasks };
+    return { cats: (m && m.cats) || [], tasks: (m && m.tasks) || [] };
+  }
+  function valuesFor(mid, wk) { const log = getLog(mid, wk); return (log && log.values) || {}; }
+  function total(arr) { return (arr || []).reduce((s, v) => s + (Number(v) || 0), 0); }
+  function ratio(task, tot) { const tg = Number(task.target) || 0; return tg > 0 ? Math.min(tot / tg, 1) : (tot > 0 ? 1 : 0); }
+  function summary(mid, wk) {
+    const { tasks } = setupFor(mid, wk), vals = valuesFor(mid, wk);
+    if (!tasks.length) return { pct: 0, wins: 0, count: 0 };
+    let sum = 0, wins = 0;
+    tasks.forEach(t => { const tot = total(vals[t.id]); sum += ratio(t, tot); if (tot >= (Number(t.target) || 0) && (Number(t.target) || 0) > 0) wins++; });
+    return { pct: Math.round((sum / tasks.length) * 100), wins, count: tasks.length };
+  }
+
+  function writeFailed(e) {
+    if (e && e.code === "code") { askCode(); return; }
+    toast("That change didn't save. Check your connection and try again.");
+  }
+
+  function askCode(wrong) {
+    stopPolling();
+    main.innerHTML = '<section class="panel"><form class="addform" id="codeForm" style="border:0;border-radius:14px">' +
+      '<div class="field"><label for="codeInput">Board code</label><input class="input" id="codeInput" autocomplete="off" required placeholder="Enter the code your community shared"></div>' +
+      (wrong ? '<p style="color:var(--miss)">That code didn\'t work. Check it and try again.</p>' : '<p class="saving">This board is for community members. You only need to enter the code once on this device.</p>') +
+      '<div class="actions"><button class="btn primary" type="submit">Open the board</button></div></form></section>';
+    $("#codeForm").onsubmit = async ev => {
+      ev.preventDefault();
+      boardCode = $("#codeInput").value.trim();
+      store("itb.code", boardCode);
+      try { await refresh(); startPolling(); render(true); } catch (err) { askCode(true); }
+    };
+    $("#codeInput").focus();
+  }
+
+  function queueLog(mid, wk, setup, values) {
+    const id = logId(mid, wk);
+    local[id] = { memberId: mid, week: wk, cats: setup.cats, tasks: setup.tasks, values, updatedAt: Date.now() };
+    const p = pending[id] || (pending[id] = { timer: null, inflight: false, dirty: false });
+    p.dirty = true;
+    clearTimeout(p.timer);
+    p.timer = setTimeout(() => flush(id), 600);
+    showSaving(true);
+  }
+  async function flush(id) {
+    const p = pending[id];
+    if (!p) return;
+    if (p.inflight) { p.timer = setTimeout(() => flush(id), 300); return; }
+    if (!p.dirty) return;
+    p.dirty = false; p.inflight = true;
+    const l = local[id];
+    try { await api("PUT", "/api/logs/" + encodeURIComponent(l.memberId) + "/" + l.week, { cats: l.cats, tasks: l.tasks, values: l.values }); serverLogs.set(id, clone(l)); }
+    catch (e) { writeFailed(e); }
+    p.inflight = false;
+    if (p.dirty) flush(id);
+    else { delete pending[id]; delete local[id]; showSaving(false); }
+  }
+  function showSaving(on) {
+    const el = $("#savestate");
+    if (!el) return;
+    el.textContent = on || Object.keys(pending).length ? "Saving..." : "All changes saved";
+  }
+
+  // ---------- Sync (polls the server every few seconds) ----------
+  let pollTimer = null, reqSeq = 0;
+  async function refresh() {
+    const seq = ++reqSeq, wk = week, ep = writeEpoch;
+    const st = await api("GET", "/api/state?week=" + wk);
+    if (seq !== reqSeq || wk !== week || ep !== writeEpoch) return;
+    const m = new Map();
+    st.members.forEach(x => m.set(x.id, x));
+    const lg = new Map();
+    Object.keys(st.logs).forEach(mid => lg.set(logId(mid, wk), Object.assign({ memberId: mid, week: wk }, st.logs[mid])));
+    members = m; serverLogs = lg; membersLoaded = true; logsLoaded = true;
+    if (view.mode === "member" && !members.has(view.memberId)) { view = { mode: "board", memberId: null }; editing = null; }
+    render();
+  }
+  async function tick() {
+    if (document.hidden) return;
+    try { await refresh(); } catch (e) { if (e.code === "code") askCode(); }
+  }
+  function startPolling() { stopPolling(); pollTimer = setInterval(tick, 5000); }
+  function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && pollTimer) tick(); });
+  function subscribeWeek() { serverLogs = new Map(); logsLoaded = false; tick(); }
+
+  // ---------- Render ----------
+  function renderWeekLabel() {
+    const tense = weekTense(week);
+    $("#weekLabel").innerHTML = "<strong>Week of " + esc(weekRange(week)) + "</strong><span>" + (tense === "current" ? "This week" : tense === "past" ? "Past week" : "Upcoming week") + "</span>";
+    $("#thisWeek").disabled = week === CURRENT;
+  }
+
+  function render(force) {
+    renderWeekLabel();
+    if (!db) return;
+    if (view.mode === "member" && members.has(view.memberId)) {
+      if (editing) { if (force || !main.querySelector(".editor")) renderEditor(); return; }
+      renderMember(force);
+    } else {
+      renderBoard();
+    }
+  }
+
+  function unavailableHTML() {
+    return '<section class="panel"><div class="empty"><strong>The board couldn\'t load</strong><p>Check your connection and refresh the page.</p></div></section>';
+  }
+
+  function renderBoard() {
+    gridSig = "";
+    if (main.querySelector(".addform") && document.activeElement && main.contains(document.activeElement)) {
+      // keep the add form intact while someone types; refresh the roster only
+      const list = $("#rosterWrap"); if (list) list.innerHTML = rosterHTML();
+      const st = $("#boardStats"); if (st) st.innerHTML = statsHTML();
+      return;
+    }
+    main.innerHTML =
+      '<section class="panel">' +
+        '<div class="board-head">' +
+          '<div class="stats" id="boardStats">' + statsHTML() + '</div>' +
+          (canWrite ? '<button class="btn primary" id="addBtn">' + (showAdd ? "Close" : "Add yourself") + '</button>' : "") +
+        '</div>' +
+        (showAdd && canWrite ? addFormHTML() : "") +
+        '<div id="rosterWrap">' + rosterHTML() + '</div>' +
+      '</section>';
+    const ab = $("#addBtn"); if (ab) ab.onclick = () => { showAdd = !showAdd; render(); if (showAdd) setTimeout(() => { const n = $("#newName"); if (n) n.focus(); }, 0); };
+    const f = $("#addForm"); if (f) f.onsubmit = onAddMember;
+    main.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openMember(b.dataset.open));
+  }
+
+  function statsHTML() {
+    const list = [...members.values()];
+    const sums = list.map(m => summary(m.id, week));
+    const avg = sums.length ? Math.round(sums.reduce((s, x) => s + x.pct, 0) / sums.length) : 0;
+    const full = sums.filter(s => s.count && s.wins === s.count).length;
+    return '<div class="stat"><b>' + list.length + '</b><span>members</span></div>' +
+      '<div class="stat"><b>' + avg + '%</b><span>average completion</span></div>' +
+      '<div class="stat"><b>' + full + '</b><span>hit every KPI</span></div>';
+  }
+
+  function rosterHTML() {
+    if (!membersLoaded) return '<div class="empty"><strong>Loading members</strong></div>';
+    const list = [...members.values()].map(m => Object.assign({ s: summary(m.id, week) }, m));
+    if (!list.length) {
+      return '<div class="empty"><strong>No one is on the board yet</strong><p>Add yourself to get a starter set of weekly inputs, then change them to fit your business.</p></div>';
+    }
+    list.sort((a, b) => b.s.pct - a.s.pct || String(a.name).localeCompare(String(b.name)));
+    return '<ol class="roster">' + list.map((m, i) => {
+      const isMine = mine.has(m.id);
+      const hasLog = !!getLog(m.id, week);
+      return '<li><button class="row" data-open="' + esc(m.id) + '">' +
+        '<span class="rank">' + (i + 1) + '</span>' +
+        '<span class="who"><strong>' + esc(m.name || "Unnamed") + (isMine ? '<span class="chip">You</span>' : "") + '</strong>' +
+          '<span>' + m.s.count + ' inputs tracked' + (hasLog ? "" : " &middot; nothing logged yet") + '</span></span>' +
+        '<span class="meter"><span class="bar' + (m.s.pct >= 100 ? " done" : "") + '"><i style="width:' + m.s.pct + '%"></i></span>' +
+          '<small>' + m.s.wins + ' of ' + m.s.count + ' KPIs hit</small></span>' +
+        '<span class="pct">' + m.s.pct + '%</span>' +
+      '</button></li>';
+    }).join("") + '</ol>';
+  }
+
+  function addFormHTML() {
+    return '<form class="addform" id="addForm">' +
+      '<div class="field"><label for="newName">Your name</label><input class="input" id="newName" maxlength="60" placeholder="First and last name" required autocomplete="name"></div>' +
+      '<div class="field"><span class="legend">Starting inputs</span><div class="choices">' +
+        '<label class="choice"><input type="radio" name="tpl" id="tplBiz" value="business" checked><span><strong>Business starter set</strong><small>11 inputs across sales, marketing, delivery and owner habits. Edit anything after.</small></span></label>' +
+        '<label class="choice"><input type="radio" name="tpl" id="tplBlank" value="blank"><span><strong>Start blank</strong><small>One empty input. Build your own list from scratch.</small></span></label>' +
+      '</div></div>' +
+      '<div class="actions"><button class="btn primary" type="submit">Add me to the board</button></div>' +
+    '</form>';
+  }
+
+  async function onAddMember(e) {
+    e.preventDefault();
+    const name = $("#newName").value.trim();
+    if (!name) { $("#newName").focus(); return; }
+    const tpl = $("#tplBlank").checked ? blankTemplate() : businessTemplate();
+    const newId = uid() + uid();
+    const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+    try {
+      await api("PUT", "/api/members/" + newId, { name, cats: tpl.cats, tasks: tpl.tasks });
+      markMine(newId);
+      showAdd = false;
+      members.set(newId, { id: newId, name, cats: tpl.cats, tasks: tpl.tasks });
+      openMember(newId);
+      toast("You're on the board. Log your first day or edit your inputs.");
+    } catch (err) { btn.disabled = false; writeFailed(err); }
+  }
+
+  function openMember(id) { view = { mode: "member", memberId: id }; editing = null; deleteArmed = false; gridSig = ""; render(true); window.scrollTo(0, 0); }
+
+  // ----- Member sheet -----
+  const CHECK_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  function renderMember(force) {
+    const m = members.get(view.memberId);
+    const setup = setupFor(m.id, week);
+    const sig = JSON.stringify([m.id, m.name, week, setup, canWrite]);
+    if (!force && sig === gridSig && main.querySelector("table.grid")) { updateGrid(); return; }
+    gridSig = sig;
+    const ti = todayIdx(week), wkStart = fromKey(week);
+    const isMine = mine.has(m.id);
+    let rows = "";
+    setup.cats.forEach(c => {
+      const tasks = setup.tasks.filter(t => t.catId === c.id);
+      rows += '<tr class="cat"><td class="taskcol">' + esc(c.name) + '</td><td colspan="11"></td></tr>';
+      tasks.forEach(t => {
+        rows += '<tr data-task="' + esc(t.id) + '"><td class="taskcol">' + esc(t.name) + '<small>' + (t.type === "check" ? "Tick each day you do it" : "Log the number each day") + '</small></td>' +
+          '<td class="kpi">' + esc(fmt(Number(t.target) || 0)) + (t.unit ? " " + esc(t.unit) : "") + '</td>';
+        for (let d = 0; d < 7; d++) {
+          const label = esc(t.name) + ", " + DAYS[d];
+          rows += '<td class="day' + (d === ti ? " today" : "") + '">' + (t.type === "check"
+            ? '<button class="tick" data-d="' + d + '" aria-pressed="false" aria-label="' + label + '"' + (canWrite ? "" : " disabled") + '>' + CHECK_SVG + '</button>'
+            : '<input class="cell" id="c-' + esc(t.id) + '-' + d + '" data-d="' + d + '" inputmode="decimal" autocomplete="off" placeholder="0" aria-label="' + label + '"' + (canWrite ? "" : " readonly") + '>') + '</td>';
+        }
+        rows += '<td class="total"></td><td class="prog"><span class="bar"><i></i></span><small></small></td><td class="result"></td></tr>';
+      });
+    });
+    const head = DAYS.map((d, i) => '<th class="' + (i === ti ? "today" : "") + '">' + d + '<small>' + addDays(wkStart, i).getDate() + '</small></th>').join("");
+    main.innerHTML =
+      '<div><button class="btn ghost" id="backBtn">&#8249; All members</button></div>' +
+      '<section class="panel">' +
+        '<div class="member-head">' +
+          '<div class="member-title"><span class="eyebrow">' + (isMine ? "Your sheet" : "Member sheet") + '</span><h2>' + esc(m.name || "Unnamed") + '</h2></div>' +
+          '<div class="scorebox"><div><div class="bigpct" id="mPct">0%</div><span class="saving">week completion</span></div>' +
+            '<div><span class="bar" id="mBar"><i></i></span><span class="saving" id="mWins"></span></div>' +
+            (canWrite ? '<button class="btn" id="editBtn">Edit inputs &amp; KPIs</button>' : "") +
+          '</div>' +
+        '</div>' +
+        (setup.tasks.length
+          ? '<div class="grid-wrap"><table class="grid"><thead><tr><th class="taskcol">Input</th><th>Weekly KPI</th>' + head + '<th>Total</th><th>Progress</th><th>Result</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+          : '<div class="empty"><strong>No inputs set for this week</strong><p>Use Edit inputs &amp; KPIs to add what you want to track.</p></div>') +
+        '<div class="foot"><span>Completion is the average of each input\'s progress toward its KPI, capped at 100%.</span><span id="savestate">' + (Object.keys(pending).length ? "Saving..." : (canWrite ? "All changes saved" : "View only")) + '</span></div>' +
+      '</section>';
+    $("#backBtn").onclick = () => { view = { mode: "board", memberId: null }; render(true); };
+    const eb = $("#editBtn"); if (eb) eb.onclick = startEdit;
+    main.querySelectorAll("input.cell").forEach(inp => {
+      inp.addEventListener("input", onCellInput);
+      inp.addEventListener("keydown", onCellKey);
+    });
+    main.querySelectorAll("button.tick").forEach(b => b.onclick = onTick);
+    updateGrid();
+  }
+
+  function updateGrid() {
+    const m = members.get(view.memberId); if (!m) return;
+    const setup = setupFor(m.id, week), vals = valuesFor(m.id, week), tense = weekTense(week);
+    setup.tasks.forEach(t => {
+      const tr = main.querySelector('tr[data-task="' + CSS.escape(t.id) + '"]'); if (!tr) return;
+      const arr = vals[t.id] || [];
+      tr.querySelectorAll("[data-d]").forEach(el => {
+        const v = Number(arr[+el.dataset.d]) || 0;
+        if (el.tagName === "BUTTON") el.setAttribute("aria-pressed", v > 0 ? "true" : "false");
+        else if (document.activeElement !== el) el.value = v ? fmt(v) : "";
+      });
+      const tot = total(arr), tg = Number(t.target) || 0, r = ratio(t, tot);
+      tr.querySelector(".total").textContent = fmt(tot);
+      const bar = tr.querySelector(".prog .bar");
+      bar.classList.toggle("done", r >= 1);
+      bar.querySelector("i").style.width = Math.round(r * 100) + "%";
+      tr.querySelector(".prog small").textContent = Math.round(r * 100) + "%";
+      let pill;
+      if (tg > 0 && tot >= tg) pill = '<span class="pill win">Win</span>';
+      else if (tense === "past") pill = '<span class="pill loss">Loss</span>';
+      else if (tense === "future") pill = '<span class="pill open">Not started</span>';
+      else pill = '<span class="pill open">' + fmt(Math.max(tg - tot, 0)) + ' to go</span>';
+      tr.querySelector(".result").innerHTML = pill;
+    });
+    const s = summary(m.id, week);
+    const p = $("#mPct"); if (p) p.textContent = s.pct + "%";
+    const b = $("#mBar"); if (b) { b.classList.toggle("done", s.pct >= 100); b.querySelector("i").style.width = s.pct + "%"; }
+    const w = $("#mWins"); if (w) w.textContent = s.wins + " of " + s.count + " KPIs hit";
+  }
+
+  function currentValues() { return clone(valuesFor(view.memberId, week)); }
+  function writeCell(taskId, d, v) {
+    const setup = clone(setupFor(view.memberId, week));
+    const vals = currentValues();
+    const arr = (vals[taskId] || [0, 0, 0, 0, 0, 0, 0]).slice(0, 7);
+    while (arr.length < 7) arr.push(0);
+    arr[d] = v;
+    vals[taskId] = arr;
+    queueLog(view.memberId, week, setup, vals);
+    updateGrid();
+  }
+  function onCellInput(e) {
+    if (!canWrite) return;
+    const el = e.target, tid = el.closest("tr").dataset.task;
+    const raw = el.value.replace(",", ".").trim();
+    const n = raw === "" ? 0 : parseFloat(raw);
+    if (raw !== "" && (!isFinite(n) || n < 0)) return;
+    writeCell(tid, +el.dataset.d, Math.round(n * 100) / 100);
+  }
+  function onCellKey(e) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const cells = [...main.querySelectorAll("input.cell")];
+    const i = cells.indexOf(e.target);
+    const d = e.target.dataset.d;
+    const below = cells.slice(i + 1).find(c => c.dataset.d === d);
+    if (below) below.focus(); else e.target.blur();
+  }
+  function onTick(e) {
+    if (!canWrite) return;
+    const b = e.currentTarget, tid = b.closest("tr").dataset.task;
+    writeCell(tid, +b.dataset.d, b.getAttribute("aria-pressed") === "true" ? 0 : 1);
+  }
+
+  // ----- Setup editor -----
+  function startEdit() {
+    const m = members.get(view.memberId);
+    const s = setupFor(m.id, week);
+    editing = { name: m.name || "", cats: clone(s.cats), tasks: clone(s.tasks) };
+    deleteArmed = false;
+    render(true);
+  }
+
+  function renderEditor() {
+    const e = editing;
+    const cats = e.cats.map(c => {
+      const tasks = e.tasks.filter(t => t.catId === c.id).map(t =>
+        '<div class="taskrow" data-tid="' + esc(t.id) + '">' +
+          '<div class="field"><label for="tn-' + esc(t.id) + '">Input</label><input class="input" id="tn-' + esc(t.id) + '" data-k="name" maxlength="80" value="' + esc(t.name) + '"></div>' +
+          '<div class="field"><label for="tt-' + esc(t.id) + '">How you log it</label><select class="input" id="tt-' + esc(t.id) + '" data-k="type"><option value="count"' + (t.type !== "check" ? " selected" : "") + '>Number per day</option><option value="check"' + (t.type === "check" ? " selected" : "") + '>Done / not done</option></select></div>' +
+          '<div class="field"><label for="tg-' + esc(t.id) + '">Weekly KPI</label><input class="input num" id="tg-' + esc(t.id) + '" data-k="target" inputmode="decimal" value="' + esc(t.target) + '"></div>' +
+          '<div class="field"><label for="tu-' + esc(t.id) + '">Unit</label><input class="input" id="tu-' + esc(t.id) + '" data-k="unit" maxlength="20" placeholder="calls, hours..." value="' + esc(t.unit || "") + '"></div>' +
+          '<button class="btn ghost" data-del-task="' + esc(t.id) + '" aria-label="Remove ' + esc(t.name) + '">Remove</button>' +
+        '</div>').join("");
+      return '<div class="catblock" data-cid="' + esc(c.id) + '">' +
+        '<div class="cathead"><input class="input" id="cn-' + esc(c.id) + '" data-cat="' + esc(c.id) + '" maxlength="40" aria-label="Section name" value="' + esc(c.name) + '"><button class="btn" data-del-cat="' + esc(c.id) + '">Remove section</button></div>' +
+        '<div class="taskrows">' + tasks + '</div>' +
+        '<div class="addtask"><button class="btn" data-add-task="' + esc(c.id) + '">+ Add input</button></div>' +
+      '</div>';
+    }).join("");
+    main.innerHTML =
+      '<div><button class="btn ghost" id="cancelTop">&#8249; Back to sheet</button></div>' +
+      '<section class="panel"><div class="editor">' +
+        '<div class="field"><label for="editName">Name on the board</label><input class="input" id="editName" maxlength="60" value="' + esc(e.name) + '"></div>' +
+        '<p class="note">These inputs and KPIs apply to the week of ' + esc(weekRange(week)) + ' and carry forward to every later week you haven\'t logged yet. Weeks you already logged keep the KPIs they had.</p>' +
+        cats +
+        '<div><button class="btn" id="addCat">+ Add section</button></div>' +
+        '<div class="editor-actions">' +
+          '<div class="actions"><button class="btn primary" id="saveSetup">Save inputs</button><button class="btn" id="cancelEdit">Cancel</button></div>' +
+          '<button class="btn danger' + (deleteArmed ? " armed" : "") + '" id="delMember">' + (deleteArmed ? "Click again to remove this member and all their weeks" : "Remove from board") + '</button>' +
+        '</div>' +
+      '</div></section>';
+
+    main.querySelectorAll(".taskrow [data-k]").forEach(inp => {
+      const handler = () => {
+        const t = editing.tasks.find(x => x.id === inp.closest(".taskrow").dataset.tid); if (!t) return;
+        const k = inp.dataset.k;
+        if (k === "target") { const n = parseFloat(inp.value.replace(",", ".")); t.target = isFinite(n) && n >= 0 ? n : 0; }
+        else t[k] = inp.value;
+      };
+      inp.addEventListener("input", handler); inp.addEventListener("change", handler);
+    });
+    main.querySelectorAll("[data-cat]").forEach(inp => inp.addEventListener("input", () => { const c = editing.cats.find(x => x.id === inp.dataset.cat); if (c) c.name = inp.value; }));
+    $("#editName").addEventListener("input", ev => { editing.name = ev.target.value; });
+    main.querySelectorAll("[data-del-task]").forEach(b => b.onclick = () => { editing.tasks = editing.tasks.filter(t => t.id !== b.dataset.delTask); renderEditor(); });
+    main.querySelectorAll("[data-del-cat]").forEach(b => b.onclick = () => { const id = b.dataset.delCat; editing.cats = editing.cats.filter(c => c.id !== id); editing.tasks = editing.tasks.filter(t => t.catId !== id); renderEditor(); });
+    main.querySelectorAll("[data-add-task]").forEach(b => b.onclick = () => {
+      const t = { id: uid(), catId: b.dataset.addTask, name: "", target: 5, unit: "", type: "count" };
+      editing.tasks.push(t); renderEditor(); const n = $("#tn-" + t.id); if (n) n.focus();
+    });
+    $("#addCat").onclick = () => {
+      const c = { id: uid(), name: "New section" };
+      editing.cats.push(c);
+      editing.tasks.push({ id: uid(), catId: c.id, name: "", target: 5, unit: "", type: "count" });
+      renderEditor(); const n = $("#cn-" + c.id); if (n) { n.focus(); n.select(); }
+    };
+    const cancel = () => { editing = null; deleteArmed = false; render(true); };
+    $("#cancelEdit").onclick = cancel; $("#cancelTop").onclick = cancel;
+    $("#saveSetup").onclick = saveSetup;
+    $("#delMember").onclick = onDeleteMember;
+  }
+
+  async function saveSetup() {
+    const e = editing, mid = view.memberId;
+    e.tasks.forEach(t => { t.name = (t.name || "").trim() || "Untitled input"; t.unit = (t.unit || "").trim(); t.target = Number(t.target) || 0; });
+    e.cats.forEach(c => { c.name = (c.name || "").trim() || "Untitled section"; });
+    const name = e.name.trim() || (members.get(mid) || {}).name || "Unnamed";
+    const btn = $("#saveSetup"); btn.disabled = true;
+    try {
+      await api("PUT", "/api/members/" + encodeURIComponent(mid), { name, cats: e.cats, tasks: e.tasks });
+      const m = members.get(mid); if (m) Object.assign(m, { name, cats: e.cats, tasks: e.tasks });
+      if (getLog(mid, week)) {
+        const vals = currentValues(), keep = {};
+        e.tasks.forEach(t => { if (vals[t.id]) keep[t.id] = vals[t.id]; });
+        queueLog(mid, week, { cats: e.cats, tasks: e.tasks }, keep);
+      }
+      editing = null; deleteArmed = false;
+      render(true);
+      toast("Inputs saved");
+    } catch (err) { btn.disabled = false; writeFailed(err); }
+  }
+
+  async function onDeleteMember() {
+    if (!deleteArmed) { deleteArmed = true; renderEditor(); return; }
+    const mid = view.memberId;
+    try {
+      await api("DELETE", "/api/members/" + encodeURIComponent(mid));
+      editing = null; deleteArmed = false;
+      members.delete(mid);
+      view = { mode: "board", memberId: null };
+      render(true);
+      toast("Member removed");
+    } catch (err) { writeFailed(err); }
+  }
+
+  // ---------- Week nav ----------
+  function goWeek(k) {
+    if (k === week) return;
+    week = k; gridSig = "";
+    if (editing) { editing = null; deleteArmed = false; }
+    renderWeekLabel();
+    if (db) subscribeWeek();
+    render(true);
+  }
+  $("#prevWeek").onclick = () => goWeek(keyOf(addDays(fromKey(week), -7)));
+  $("#nextWeek").onclick = () => goWeek(keyOf(addDays(fromKey(week), 7)));
+  $("#thisWeek").onclick = () => goWeek(CURRENT);
+  window.addEventListener("beforeunload", () => { Object.keys(pending).forEach(id => { clearTimeout(pending[id].timer); flush(id); }); });
+
+  // ---------- Boot ----------
+  renderWeekLabel();
+  (async function init() {
+    try { await refresh(); startPolling(); render(true); }
+    catch (e) { if (e.code === "code") askCode(); else { main.innerHTML = unavailableHTML(); startPolling(); } }
+  })();
+})();
+</script>
+</body>
+</html>
