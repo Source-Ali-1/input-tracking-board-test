@@ -7,15 +7,20 @@ board code, when BOARD_CODE is set) can edit any sheet.
 
 Storage is SQLite. On Railway, mount a volume and point DATA_DIR at it
 (e.g. /data) so the board survives redeploys.
+
+Set SHEET_SCRIPT_URL and SYNC_SECRET to keep the board in two-way sync with
+the team's Google Sheet (see sync.py and apps-script/SETUP.md).
 """
 
+import hmac
 import json
 import os
 import re
 import sqlite3
-import time
 
 from flask import Flask, abort, g, jsonify, request
+
+import sync
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
@@ -68,6 +73,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS logs_week ON logs(week);
             """
         )
+        conn.executescript(sync.SCHEMA)
         conn.commit()
 
 
@@ -100,6 +106,7 @@ def clean_setup(body):
             "name": str(t.get("name", ""))[:80],
             "target": target,
             "unit": str(t.get("unit", ""))[:20],
+            "goal": str(t.get("goal", ""))[:120],
             "type": "check" if t.get("type") == "check" else "count",
         })
     return cats, tasks
@@ -143,15 +150,19 @@ def put_member(member_id):
     body = request.get_json(silent=True) or {}
     name = str(body.get("name", "")).strip()[:60] or "Unnamed"
     cats, tasks = clean_setup(body)
-    data = json.dumps({"name": name, "cats": cats, "tasks": tasks})
-    now = time.time()
+    doc = {"name": name, "cats": cats, "tasks": tasks}
+    ts = sync.now_ms()
+    now = ts / 1000
     conn = get_db()
-    conn.execute(
-        "INSERT INTO members (id, data, created_at, updated_at) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-        (member_id, data, now, now),
-    )
-    conn.commit()
+    with sync.LOCK:
+        conn.execute(
+            "INSERT INTO members (id, data, created_at, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+            (member_id, json.dumps(doc), now, now),
+        )
+        sync.on_member_saved(conn, member_id, doc, ts)
+        conn.commit()
+    sync.kick()
     return jsonify({"ok": True})
 
 
@@ -161,9 +172,12 @@ def delete_member(member_id):
     if not ID_RE.match(member_id):
         abort(400)
     conn = get_db()
-    conn.execute("DELETE FROM members WHERE id = ?", (member_id,))
-    conn.execute("DELETE FROM logs WHERE member_id = ?", (member_id,))
-    conn.commit()
+    with sync.LOCK:
+        conn.execute("DELETE FROM members WHERE id = ?", (member_id,))
+        conn.execute("DELETE FROM logs WHERE member_id = ?", (member_id,))
+        sync.on_member_deleted(conn, member_id, sync.now_ms())
+        conn.commit()
+    sync.kick()
     return jsonify({"ok": True})
 
 
@@ -190,17 +204,43 @@ def put_log(member_id, week):
             except (TypeError, ValueError):
                 row.append(0)
         values[tid] = row + [0] * (7 - len(row))
-    data = json.dumps({"cats": cats, "tasks": tasks, "values": values})
-    conn.execute(
-        "INSERT INTO logs (member_id, week, data, updated_at) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(member_id, week) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-        (member_id, week, data, time.time()),
-    )
-    conn.commit()
+    doc = {"cats": cats, "tasks": tasks, "values": values}
+    ts = sync.now_ms()
+    with sync.LOCK:
+        old = conn.execute("SELECT data FROM logs WHERE member_id = ? AND week = ?", (member_id, week)).fetchone()
+        conn.execute(
+            "INSERT INTO logs (member_id, week, data, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(member_id, week) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+            (member_id, week, json.dumps(doc), ts / 1000),
+        )
+        sync.on_log_saved(conn, member_id, week, json.loads(old["data"]) if old else None, doc, ts)
+        conn.commit()
+    sync.kick()
     return jsonify({"ok": True})
 
 
+@app.route("/api/sync/inbound", methods=["POST"])
+def sync_inbound():
+    """Changes pushed by the sheet's Apps Script (onEdit, retries, new weeks)."""
+    if not sync.SECRET or not hmac.compare_digest(request.headers.get("X-Sync-Secret", ""), sync.SECRET):
+        abort(401)
+    body = request.get_json(silent=True) or {}
+    changes = body.get("changes") if isinstance(body.get("changes"), list) else []
+    conn = get_db()
+    with sync.LOCK:
+        applied = sync.apply_changes(conn, changes, body.get("currentWeek"))
+    return jsonify({"ok": True, "applied": applied})
+
+
+@app.route("/api/sync/status")
+def sync_status():
+    check_code()
+    return jsonify(sync.status(get_db()))
+
+
 init_db()
+sync.configure(DB_PATH, clean_setup)
+sync.start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
