@@ -244,6 +244,15 @@ function readModel_(cachedOnly) {
   const md = rowMetadata_(sh);
   const headers = [];
   for (let r = 1; r <= lastRow; r++) if (/^input$/i.test(text(r, 1))) headers.push(r);
+  // In this tab a strike means "removed on the board", and only rows tagged removed keep it. A row
+  // inserted next to a struck row copies its strike from Google Sheets, so it's taken off again.
+  if (headers.length) {
+    const first = headers[0] + 1, n = lastRow - first + 1;
+    if (n > 0) sh.getRange(first, 1, n, 3).getFontLines().forEach((line, i) => {
+      const r = first + i;
+      if (!md.archived[r] && line.some(x => x === 'line-through')) sh.getRange(r, 1, 1, sh.getMaxColumns()).setFontLine('none');
+    });
+  }
   headers.forEach((h, i) => {
     // The name row is right above the header, or above a month row ("September 2026", "Oct").
     // The person's id tag may sit on either of those two rows (or the header): it is kept wherever
