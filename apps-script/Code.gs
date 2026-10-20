@@ -91,10 +91,19 @@ function handleEdit(e) {
 
 /** The changes one edit makes, stamped with the time of the edit (never over a newer stamp). */
 function collectEdit_(rg, edited) {
-  const model = readModel_(), now = Date.now();
+  let model = readModel_();
+  const now = Date.now();
   const r1 = Math.min(rg.getLastRow(), model.lastRow), c1 = Math.min(rg.getLastColumn(), Math.max(model.lastCol, 3));
   const changes = [];
-  let structural = Object.keys(NEW_SETUP).length > 0;
+  // Typing in a struck-through row (an input or section removed on the board) brings it back: the
+  // strike and the "removed" tag go, and the board gets the input again with what was typed.
+  let revived = false;
+  for (let r = rg.getRow(); r <= r1; r++) {
+    const b = blockOf_(model, r), t = model.taskAt[r], c = b && b.cats.find(x => x.row === r);
+    if ((t && t.archived) || (c && c.archived)) { setArchived_(model.sh, r, false); revived = true; }
+  }
+  if (revived) { bumpStructure_(); model = readModel_(); }
+  let structural = revived || Object.keys(NEW_SETUP).length > 0;
   for (let r = rg.getRow(); r <= r1; r++) {
     const b = blockOf_(model, r);
     if (!b) continue;

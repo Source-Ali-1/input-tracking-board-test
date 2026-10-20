@@ -39,6 +39,7 @@ HEADER_ARRAY=1 run "Week total / Win-Loss formulas" "python formulas.py" ""
 run "Headings vs inputs"             "python headings.py" ""
 run "No duplicate people"            "python duplicates.py" ""
 run "Every duplicate scenario"       "python dupscenarios.py" ""
+run "Removed input typed back"       "python revive.py" ""
 run "Week added by hand"             "python manualweek.py proper | grep -q \"'Mon 10/26'\" && echo PASS proper-format week kept, no duplicate" ""
 run "Week added by hand, odd format" "python manualweek.py odd | grep -q \"'Monday 26 Oct'\" && echo PASS odd-format week not overwritten" ""
 bash restart.sh stopall
