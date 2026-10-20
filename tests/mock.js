@@ -70,11 +70,12 @@ class Range {
   setValue(v) { this.s.set(this.r, this.c, v); return this; }
   setValues(vs) { vs.forEach((row, i) => row.forEach((v, j) => this.s.set(this.r + i, this.c + j, v))); return this; }
   clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) if (this.r + i <= this.s.rows.length) this.s.rows[this.r + i - 1].cells[this.c + j - 1] = ''; return this; }
-  copyFmt(dst) { for (let i = 0; i < this.nr; i++) { const src = this.s.rows[this.r + i - 1], to = dst.s.rows[dst.r + i - 1]; to.fmt = (src.fmt || []).slice(0); } }
+  copyFmt(dst) { for (let i = 0; i < this.nr; i++) { const src = this.s.rows[this.r + i - 1], to = dst.s.rows[dst.r + i - 1]; to.fmt = (src.fmt || []).slice(0); to.strike = !!src.strike; } }
   copyTo(dst, type) { if (type === 'F') return this.copyFmt(dst); if (type) return; const v = this.getValues(); dst.setValues(v); this.copyFmt(dst); }
   getFormulasR1C1() { return this.getValues().map(row => row.map(v => typeof v === 'string' && v[0] === '=' ? v : '')); }
   setFormulaR1C1(f) { this.s.set(this.r, this.c, f); return this; }
   setFontLine(l) { for (let i = 0; i < this.nr; i++) this.s.rows[this.r + i - 1].strike = l === 'line-through'; return this; }
+  getFontLines() { const o = []; for (let i = 0; i < this.nr; i++) { const row = this.s.rows[this.r + i - 1]; o.push(Array(this.nc).fill(row && row.strike ? 'line-through' : 'none')); } return o; }
   addDeveloperMetadata(key, value) { this.s.rows[this.r - 1].md.push({ key, value, id: mdSeq++ }); return this; }
   getDeveloperMetadata() { const row = this.s.rows[this.r - 1]; return row.md.map(m => new MD(this.s, row, m)); }
 }
@@ -146,7 +147,7 @@ const api = ctx.__api;
 
 function dump() {
   return tracker.rows.map((r, i) => ({ row: i + 1, a: r.cells[0] || '', md: r.md.map(m => m.key + '=' + m.value), strike: !!r.strike, fmt: (r.fmt || [])[0] || '', cells: r.cells }))
-    .filter(r => r.a || r.md.length);
+    .filter(r => r.a || r.md.length || r.strike);
 }
 
 http.createServer((req, res) => {
@@ -183,7 +184,10 @@ http.createServer((req, res) => {
         out = '{"ok":true}';
       } else if (u.pathname === '/deleteRow') { const e = JSON.parse(body); tracker.deleteRows(e.row, 1); api.handleChange({ changeType: 'REMOVE_ROW' }); out = '{"ok":true}'; }
       else if (u.pathname === '/moveRow') { const e = JSON.parse(body); tracker.moveRows(tracker.getRange(e.row + ':' + e.row), e.dest); api.handleChange({ changeType: 'OTHER' }); out = '{"ok":true}'; }
-      else if (u.pathname === '/insertRow') { const e = JSON.parse(body); tracker.insertRowAfter(e.after); api.handleChange({ changeType: 'INSERT_ROW' }); out = '{"ok":true}'; }
+      else if (u.pathname === '/insertRow') { // inherit: copy the strike of the row above, as Google Sheets copies formatting
+        const e = JSON.parse(body); tracker.insertRowAfter(e.after);
+        if (e.inherit) { const src = tracker.rows[e.inherit === 'below' ? e.after + 1 : e.after - 1]; tracker.rows[e.after].strike = !!(src && src.strike); tracker.rows[e.after].fmt = ((src && src.fmt) || []).slice(0); }
+        api.handleChange({ changeType: 'INSERT_ROW' }); out = '{"ok":true}'; }
       else if (u.pathname === '/setMd') { // replace a row's sync tags, e.g. an old "input" tag on a heading row
         const e = JSON.parse(body), row = tracker.rows[e.row - 1];
         row.md = row.md.filter(m => m.key.indexOf('itb_') !== 0).concat([{ key: e.key, value: e.value, id: mdSeq++ }]);
