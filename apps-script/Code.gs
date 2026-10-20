@@ -219,12 +219,14 @@ function readModel_(cachedOnly) {
   // Reading the row ids (developer metadata) is by far the slowest step, so the parsed
   // structure is cached. The key changes whenever anything that shapes it changes:
   // columns A-C, the header rows, which label-only rows hold data, or ids we wrote.
+  // The prefix changes whenever the cached shape changes (model3: blocks carry idRow), so an
+  // update never reuses a structure an older script cached.
   const sig = shown.map((row, i) => {
     const r = i + 1, base = row[0] + '\t' + row[1] + '\t' + row[2];
     if (/^input$/i.test(String(row[0]).trim())) return base + '\t' + row.join('\t');
     return row[0] && !row[1] && !row[2] && hasKpi(r) ? base + '\t*' : base;
   }).join('\n');
-  const key = 'model2:' + structureEpoch_() + ':' + Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, sig));
+  const key = 'model3:' + structureEpoch_() + ':' + Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, sig));
   const cache = CacheService.getScriptCache(), hit = cache.get(key);
   if (hit) return hydrateModel_(model, JSON.parse(hit));
   if (cachedOnly) return null; // callers without the lock mustn't tag rows
