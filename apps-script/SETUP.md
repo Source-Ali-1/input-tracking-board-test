@@ -91,14 +91,15 @@ Paste the new code, then go to **Deploy → Manage deployments → ✏️ Edit �
 | Sheet | Board |
 |---|---|
 | Person block (name row such as `ORLANDO September 2026` or `WILL`, then the `Input` header row) | member |
-| Section row (only column A filled, e.g. *Skill stacking*, *Content*, *Habits*) | section |
+| Section row (a name with no unit, no goal and no KPI in any week, e.g. *Skill stacking*, *Content*, *Habits*) | section; not counted as a KPI |
 | Input row: A = name, B = Goal served / Notes, C = Unit | input (name, goal, unit) |
 | Week block's **Target** cell | that week's target |
 | Mon–Sun cells | the daily values |
 | Total, Win / Loss | not synced; the sheet's formulas and the board each compute their own |
 
 Notes:
-- **Check-type inputs:** inputs under a *Habits* section with unit "count" (or no unit) become check-type inputs on the board.
+- **Tick box or number:** the **Unit** column decides. Unit `check` (or `done`, `yes/no`, `✓`) makes the input a daily tick box ("Done / not done") on the board; any other unit (`count`, `hours`, `posts`…) makes it a number. Changing the unit in the sheet changes the type; a type picked on the board in *Edit inputs* is kept until the unit changes.
+- **Adding an input in the sheet:** insert a row in the section and type the name, goal and unit. The script gives the new row the formatting of the input row next to it and the Week total / Win-Loss formulas; fill in the Week KPI yourself. Every input row has its own formulas (run `fixFormulas` once after installing to convert older sheets).
 - **Removing an input on the board:** the row is **struck through** in the sheet rather than deleted, so past weeks keep their numbers.
 - **Removing a person:** do it on the board, which deletes their block in the sheet. If you delete a block in the sheet by hand, the board puts it back.
 - **Reordering inputs:** changing the order on the board doesn't reorder sheet rows.

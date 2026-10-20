@@ -90,7 +90,7 @@ def clean_setup(body):
     for c in cats_in[:30]:
         if not isinstance(c, dict) or not ID_RE.match(str(c.get("id", ""))):
             continue
-        cats.append({"id": c["id"], "name": str(c.get("name", ""))[:40]})
+        cats.append({"id": c["id"], "name": str(c.get("name", ""))[:120]})
         cat_ids.add(c["id"])
     tasks = []
     for t in tasks_in[:100]:
@@ -103,10 +103,10 @@ def clean_setup(body):
         tasks.append({
             "id": t["id"],
             "catId": t["catId"],
-            "name": str(t.get("name", ""))[:80],
+            "name": str(t.get("name", ""))[:200],
             "target": target,
-            "unit": str(t.get("unit", ""))[:20],
-            "goal": str(t.get("goal", ""))[:120],
+            "unit": str(t.get("unit", ""))[:60],
+            "goal": str(t.get("goal", ""))[:300],
             "type": "check" if t.get("type") == "check" else "count",
         })
     return cats, tasks
@@ -148,8 +148,17 @@ def put_member(member_id):
     if not ID_RE.match(member_id):
         abort(400)
     body = request.get_json(silent=True) or {}
-    name = str(body.get("name", "")).strip()[:60] or "Unnamed"
+    name = str(body.get("name", "")).strip()[:120] or "Unnamed"
     cats, tasks = clean_setup(body)
+    # KPIs the editor didn't change keep their stored value (the sheet may have changed them since).
+    changed_targets = body.get("changedTargets")
+    if isinstance(changed_targets, list):
+        changed_targets = [str(x) for x in changed_targets]
+        row = get_db().execute("SELECT data FROM members WHERE id = ?", (member_id,)).fetchone()
+        stored = {t["id"]: t.get("target", 0) for t in json.loads(row["data"]).get("tasks", [])} if row else {}
+        tasks = [dict(t, target=stored[t["id"]]) if t["id"] in stored and t["id"] not in changed_targets else t for t in tasks]
+    else:
+        changed_targets = None
     doc = {"name": name, "cats": cats, "tasks": tasks}
     ts = sync.now_ms()
     now = ts / 1000
@@ -160,7 +169,8 @@ def put_member(member_id):
             "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
             (member_id, json.dumps(doc), now, now),
         )
-        sync.on_member_saved(conn, member_id, doc, ts)
+        week = str(body.get("week", ""))  # the week the editor was on; its KPIs start there
+        sync.on_member_saved(conn, member_id, doc, ts, week if WEEK_RE.match(week) else None, changed_targets)
         conn.commit()
     sync.kick()
     return jsonify({"ok": True})
@@ -208,6 +218,9 @@ def put_log(member_id, week):
     ts = sync.now_ms()
     with sync.LOCK:
         old = conn.execute("SELECT data FROM logs WHERE member_id = ? AND week = ?", (member_id, week)).fetchone()
+        changed = body.get("changed")
+        if old and isinstance(changed, dict):
+            doc = merge_log(json.loads(old["data"]), doc, changed)
         conn.execute(
             "INSERT INTO logs (member_id, week, data, updated_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(member_id, week) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
@@ -216,7 +229,44 @@ def put_log(member_id, week):
         sync.on_log_saved(conn, member_id, week, json.loads(old["data"]) if old else None, doc, ts)
         conn.commit()
     sync.kick()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "log": doc})
+
+
+def merge_log(old, new, changed):
+    """Applies only what the page says it changed onto the stored week.
+
+    The page sends its whole copy of the week, which can be a few seconds old: values and KPIs
+    the sheet changed meanwhile must not be put back. Inputs the stored week doesn't have yet are
+    taken from the page; an "Edit inputs" save (structure) sets the list of inputs and their KPIs.
+    """
+    cells = set()
+    for c in changed.get("cells") or []:
+        try:
+            cells.add((str(c[0]), int(c[1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    targets = {str(t) for t in changed.get("targets") or []}
+    new_tasks = {t["id"]: t for t in new["tasks"]}
+    old_targets = {t["id"]: t.get("target", 0) for t in old.get("tasks", [])}
+    if changed.get("structure"):
+        cats = new["cats"]
+        tasks = [dict(t, target=old_targets[t["id"]]) if t["id"] in old_targets and t["id"] not in targets else t
+                 for t in new["tasks"]]
+    else:
+        old_ids = {t["id"] for t in old.get("tasks", [])}
+        cats = old.get("cats", []) + [c for c in new["cats"] if c["id"] not in {x["id"] for x in old.get("cats", [])}]
+        tasks = [dict(t, target=new_tasks[t["id"]]["target"]) if t["id"] in targets and t["id"] in new_tasks else t
+                 for t in old.get("tasks", [])] + [t for t in new["tasks"] if t["id"] not in old_ids]
+    ids = {t["id"] for t in tasks}
+    values = {k: list(v) for k, v in (old.get("values") or {}).items() if k in ids}
+    for tid in ids:
+        if tid not in values and tid in new["values"] and not any(t["id"] == tid for t in old.get("tasks", [])):
+            values[tid] = list(new["values"][tid])  # an input the stored week didn't have
+    for tid, d in cells:
+        if tid in ids and 0 <= d <= 6:
+            row = values.setdefault(tid, [0] * 7)
+            row[d] = (new["values"].get(tid) or [0] * 7)[d]
+    return {"cats": cats, "tasks": tasks, "values": values}
 
 
 @app.route("/api/sync/inbound", methods=["POST"])
@@ -229,6 +279,7 @@ def sync_inbound():
     conn = get_db()
     with sync.LOCK:
         applied = sync.apply_changes(conn, changes, body.get("currentWeek"))
+    sync.note_push(changes, applied, body.get("diag"))
     return jsonify({"ok": True, "applied": applied})
 
 

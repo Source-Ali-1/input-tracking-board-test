@@ -317,11 +317,13 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
   function total(arr) { return (arr || []).reduce((s, v) => s + (Number(v) || 0), 0); }
   function ratio(task, tot) { const tg = Number(task.target) || 0; return tg > 0 ? Math.min(tot / tg, 1) : (tot > 0 ? 1 : 0); }
   function summary(mid, wk) {
-    const { tasks } = setupFor(mid, wk), vals = valuesFor(mid, wk);
-    if (!tasks.length) return { pct: 0, wins: 0, count: 0 };
+    // Only inputs with a KPI count: one without (e.g. a heading or a tracked-only row) can't be hit or missed.
+    const all = setupFor(mid, wk).tasks, vals = valuesFor(mid, wk);
+    const tasks = all.filter(t => (Number(t.target) || 0) > 0);
+    if (!tasks.length) return { pct: 0, wins: 0, count: 0, inputs: all.length };
     let sum = 0, wins = 0;
-    tasks.forEach(t => { const tot = total(vals[t.id]); sum += ratio(t, tot); if (tot >= (Number(t.target) || 0) && (Number(t.target) || 0) > 0) wins++; });
-    return { pct: Math.round((sum / tasks.length) * 100), wins, count: tasks.length };
+    tasks.forEach(t => { const tot = total(vals[t.id]); sum += ratio(t, tot); if (tot >= Number(t.target)) wins++; });
+    return { pct: Math.round((sum / tasks.length) * 100), wins, count: tasks.length, inputs: all.length };
   }
 
   function writeFailed(e) {
@@ -344,10 +346,18 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
     $("#codeInput").focus();
   }
 
-  function queueLog(mid, wk, setup, values) {
+  // `change` names what the user actually changed ({cells: [[taskId, day]], targets: [taskId], structure}),
+  // so the server merges just that and doesn't undo edits that arrived from the sheet meanwhile.
+  function queueLog(mid, wk, setup, values, change) {
     const id = logId(mid, wk);
     local[id] = { memberId: mid, week: wk, cats: setup.cats, tasks: setup.tasks, values, updatedAt: Date.now() };
     const p = pending[id] || (pending[id] = { timer: null, inflight: false, dirty: false });
+    const c = p.changed || (p.changed = { cells: [], targets: [], structure: false });
+    if (change) {
+      (change.cells || []).forEach(x => c.cells.push(x));
+      (change.targets || []).forEach(x => c.targets.push(x));
+      c.structure = c.structure || !!change.structure;
+    }
     p.dirty = true;
     clearTimeout(p.timer);
     p.timer = setTimeout(() => flush(id), 600);
@@ -359,8 +369,12 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
     if (p.inflight) { p.timer = setTimeout(() => flush(id), 300); return; }
     if (!p.dirty) return;
     p.dirty = false; p.inflight = true;
-    const l = local[id];
-    try { await api("PUT", "/api/logs/" + encodeURIComponent(l.memberId) + "/" + l.week, { cats: l.cats, tasks: l.tasks, values: l.values }); serverLogs.set(id, clone(l)); }
+    const l = local[id], changed = p.changed;
+    p.changed = null;
+    try {
+      const r = await api("PUT", "/api/logs/" + encodeURIComponent(l.memberId) + "/" + l.week, { cats: l.cats, tasks: l.tasks, values: l.values, changed });
+      serverLogs.set(id, Object.assign({ memberId: l.memberId, week: l.week }, r.log || clone(l)));
+    }
     catch (e) { writeFailed(e); }
     p.inflight = false;
     if (p.dirty) flush(id);
@@ -390,7 +404,7 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
     if (document.hidden) return;
     try { await refresh(); } catch (e) { if (e.code === "code") askCode(); }
   }
-  function startPolling() { stopPolling(); pollTimer = setInterval(tick, 5000); }
+  function startPolling() { stopPolling(); pollTimer = setInterval(tick, 2000); } // 2 s: sheet edits show up quickly
   function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
   document.addEventListener("visibilitychange", () => { if (!document.hidden && pollTimer) tick(); });
   function subscribeWeek() { serverLogs = new Map(); logsLoaded = false; tick(); }
@@ -462,7 +476,7 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
       return '<li><button class="row" data-open="' + esc(m.id) + '">' +
         '<span class="rank">' + (i + 1) + '</span>' +
         '<span class="who"><strong>' + esc(m.name || "Unnamed") + (isMine ? '<span class="chip">You</span>' : "") + '</strong>' +
-          '<span>' + m.s.count + ' inputs tracked' + (hasLog ? "" : " &middot; nothing logged yet") + '</span></span>' +
+          '<span>' + m.s.inputs + ' inputs tracked' + (hasLog ? "" : " &middot; nothing logged yet") + '</span></span>' +
         '<span class="meter"><span class="bar' + (m.s.pct >= 100 ? " done" : "") + '"><i style="width:' + m.s.pct + '%"></i></span>' +
           '<small>' + m.s.wins + ' of ' + m.s.count + ' KPIs hit</small></span>' +
         '<span class="pct">' + m.s.pct + '%</span>' +
@@ -591,7 +605,7 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
     while (arr.length < 7) arr.push(0);
     arr[d] = v;
     vals[taskId] = arr;
-    queueLog(view.memberId, week, setup, vals);
+    queueLog(view.memberId, week, setup, vals, { cells: [[taskId, d]] });
     updateGrid();
   }
   function onCellInput(e) {
@@ -621,7 +635,8 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
   function startEdit() {
     const m = members.get(view.memberId);
     const s = setupFor(m.id, week);
-    editing = { name: m.name || "", cats: clone(s.cats), tasks: clone(s.tasks) };
+    editing = { name: m.name || "", cats: clone(s.cats), tasks: clone(s.tasks), was: {} };
+    s.tasks.forEach(t => { editing.was[t.id] = Number(t.target) || 0; }); // KPIs as opened, to send only real changes
     deleteArmed = false;
     render(true);
   }
@@ -647,7 +662,9 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
       '<div><button class="btn ghost" id="cancelTop">&#8249; Back to sheet</button></div>' +
       '<section class="panel"><div class="editor">' +
         '<div class="field"><label for="editName">Name on the board</label><input class="input" id="editName" maxlength="60" value="' + esc(e.name) + '"></div>' +
-        '<p class="note">These inputs and KPIs apply to the week of ' + esc(weekRange(week)) + ' and carry forward to every later week you haven\'t logged yet. Weeks you already logged keep the KPIs they had.</p>' +
+        (week < CURRENT
+          ? '<p class="note">The week of ' + esc(weekRange(week)) + ' is in the past: changes here apply to that week only. Your current inputs stay as they are.</p>'
+          : '<p class="note">These inputs and KPIs apply to the week of ' + esc(weekRange(week)) + ' and carry forward to every later week you haven\'t logged yet. Weeks you already logged keep the KPIs they had.</p>') +
         cats +
         '<div><button class="btn" id="addCat">+ Add section</button></div>' +
         '<div class="editor-actions">' +
@@ -691,13 +708,22 @@ table.grid { border-collapse: collapse; width: 100%; min-width: 900px; font-size
     e.cats.forEach(c => { c.name = (c.name || "").trim() || "Untitled section"; });
     const name = e.name.trim() || (members.get(mid) || {}).name || "Unnamed";
     const btn = $("#saveSetup"); btn.disabled = true;
+    const past = week < CURRENT, m = members.get(mid) || {};
+    const changedTargets = e.tasks.filter(t => !(t.id in e.was) || e.was[t.id] !== t.target).map(t => t.id);
     try {
-      await api("PUT", "/api/members/" + encodeURIComponent(mid), { name, cats: e.cats, tasks: e.tasks });
-      const m = members.get(mid); if (m) Object.assign(m, { name, cats: e.cats, tasks: e.tasks });
-      if (getLog(mid, week)) {
+      if (!past) {
+        // `week` tells the sheet sync which week these KPIs start from.
+        await api("PUT", "/api/members/" + encodeURIComponent(mid), { name, cats: e.cats, tasks: e.tasks, week, changedTargets });
+        Object.assign(m, { name, cats: e.cats, tasks: e.tasks });
+      } else if (name !== m.name) {
+        // A past week only changes that week's log; the person's current inputs stay.
+        await api("PUT", "/api/members/" + encodeURIComponent(mid), { name, cats: m.cats, tasks: m.tasks });
+        m.name = name;
+      }
+      if (past || getLog(mid, week)) {
         const vals = currentValues(), keep = {};
         e.tasks.forEach(t => { if (vals[t.id]) keep[t.id] = vals[t.id]; });
-        queueLog(mid, week, { cats: e.cats, tasks: e.tasks }, keep);
+        queueLog(mid, week, { cats: e.cats, tasks: e.tasks }, keep, { structure: true, targets: changedTargets });
       }
       editing = null; deleteArmed = false;
       render(true);

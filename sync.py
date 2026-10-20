@@ -31,7 +31,7 @@ import urllib.request
 SCRIPT_URL = os.getenv("SHEET_SCRIPT_URL", "").strip()
 SECRET = os.getenv("SYNC_SECRET", "").strip()
 ENABLED = bool(SCRIPT_URL and SECRET)
-INTERVAL = max(float(os.getenv("SYNC_INTERVAL", "60")), 10)
+INTERVAL = max(float(os.getenv("SYNC_INTERVAL", "10")), 5)
 RECENT_WEEKS = int(os.getenv("SYNC_WEEKS", "8"))
 FULL_EVERY = 6 * 3600       # also re-check every week in the sheet this often
 MAX_ATTEMPTS = 5            # drop a change the script keeps rejecting
@@ -43,7 +43,7 @@ TARGET = -1                 # cell_meta.day used for a week's target
 # Serialises read-modify-write of members/logs between requests and the sync threads.
 LOCK = threading.RLock()
 log = logging.getLogger("itb.sync")
-state = {"lastPush": None, "lastPull": None, "lastError": None}
+state = {"lastPush": None, "lastPull": None, "lastError": None, "recent": []}
 _wake = threading.Event()
 _cfg = {}
 _started = False
@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE TABLE IF NOT EXISTS tombstones (
     member_id TEXT PRIMARY KEY,
     ts INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS seen (
+    member_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    PRIMARY KEY (member_id, item_id)
 );
 """
 
@@ -156,9 +161,14 @@ def _setup_change(mid, data, ts):
 
 # ---------- board -> sheet (called from the API routes, inside LOCK) ----------
 
-def on_member_saved(conn, mid, data, ts):
+def on_member_saved(conn, mid, data, ts, from_week=None, changed_targets=None):
     conn.execute("DELETE FROM tombstones WHERE member_id = ?", (mid,))
-    _enqueue(conn, _setup_change(mid, data, ts))
+    change = _setup_change(mid, data, ts)
+    if from_week:
+        change["fromWeek"] = from_week
+    if changed_targets is not None:
+        change["changedTargets"] = changed_targets  # the sheet writes only these KPIs
+    _enqueue(conn, change)
 
 
 def on_member_deleted(conn, mid, ts):
@@ -182,6 +192,12 @@ def on_log_saved(conn, mid, week, old, new, ts):
                                 "day": d, "value": v, "ts": ts})
     if old:
         old_targets = {t["id"]: t.get("target", 0) for t in old.get("tasks", [])}
+    else:
+        # A week's first save starts from the person's default KPIs; only KPIs set differently
+        # for this week are edits (the sheet's own KPIs for the week stay otherwise).
+        m = _member(conn, mid)
+        old_targets = {t["id"]: t.get("target", 0) for t in (m[0]["tasks"] if m else [])}
+    if old_targets:
         for t in new["tasks"]:
             if t["id"] in old_targets and not _same(t["target"], old_targets[t["id"]]):
                 _set_ts(conn, mid, week, t["id"], TARGET, ts)
@@ -218,11 +234,32 @@ def apply_setup(conn, ch, current_week, force=False, created=None):
     if cur and not force and ts <= cur[1]:
         return 0
     cats, tasks = _cfg["clean"](ch)
-    old_types = {t["id"]: t.get("type") for t in (cur[0].get("tasks", []) if cur else [])}
-    for t in tasks:  # the sheet can't hold the input type; keep what the board chose
-        if old_types.get(t["id"]):
-            t["type"] = old_types[t["id"]]
-    name = str(ch.get("name", "")).strip()[:60] or "Unnamed"
+    # Sections/inputs added on the board that the sheet hasn't received yet are still on their
+    # way there: keep them. Anything the sheet has seen before and no longer lists was removed.
+    seen = {r[0] for r in conn.execute("SELECT item_id FROM seen WHERE member_id = ?", (mid,))}
+    sheet_ids = {c["id"] for c in cats} | {t["id"] for t in tasks}
+    pending = False
+    if cur:
+        for c in cur[0].get("cats", []):
+            if c["id"] not in sheet_ids and c["id"] not in seen:
+                cats.append(c)
+                pending = True
+        cat_ids = {c["id"] for c in cats}
+        for t in cur[0].get("tasks", []):
+            if t["id"] not in sheet_ids and t["id"] not in seen and t.get("catId") in cat_ids:
+                tasks.append(t)
+                pending = True
+    _mark_seen(conn, mid, sheet_ids)
+    if pending:
+        ts += 1  # newer than the sheet's setup, so the sheet accepts the merged list
+    old_tasks = {t["id"]: t for t in (cur[0].get("tasks", []) if cur else [])}
+    for t in tasks:
+        # The sheet's type comes from the Unit column ("check" = tick box). A type chosen on
+        # the board is kept until someone changes that input's unit.
+        old = old_tasks.get(t["id"])
+        if old and old.get("type") and old.get("unit", "") == t["unit"]:
+            t["type"] = old["type"]
+    name = str(ch.get("name", "")).strip()[:120] or "Unnamed"
     data = {"name": name, "cats": cats, "tasks": tasks}
     conn.execute(
         "INSERT INTO members (id, data, created_at, updated_at) VALUES (?, ?, ?, ?) "
@@ -243,7 +280,13 @@ def apply_setup(conn, ch, current_week, force=False, created=None):
             new_tasks.append(nt)
         values = {k: v for k, v in (lg.get("values") or {}).items() if k in ids}
         _save_log(conn, mid, row["week"], {"cats": copy.deepcopy(cats), "tasks": new_tasks, "values": values})
+    if pending:
+        _enqueue(conn, _setup_change(mid, data, ts))
     return 1
+
+
+def _mark_seen(conn, mid, ids):
+    conn.executemany("INSERT OR IGNORE INTO seen (member_id, item_id) VALUES (?, ?)", [(mid, i) for i in ids])
 
 
 def _valid_ref(ch):
@@ -338,8 +381,27 @@ def apply_target(conn, ch, current_week, force=False):
 
 # ---------- reconciliation against a full snapshot ----------
 
+def _event(text):
+    """Keeps the last 40 sync events for /api/sync/status and prints them to the server log."""
+    line = time.strftime("%H:%M:%S") + "  " + text
+    state["recent"] = (state["recent"] + [line])[-40:]
+    print("[sync] " + line, flush=True)
+
+
+def note_push(changes, applied, diag):
+    """Logs a push from the sheet: how many changes, and how long the sheet's script took."""
+    cells = [c for c in changes if isinstance(c, dict) and c.get("kind") in ("cell", "target")]
+    timing = ""
+    if isinstance(diag, dict) and diag.get("started"):
+        timing = ", script %.1f s, arrived %.1f s after the trigger started" % (
+            (float(diag.get("sent", 0)) - float(diag["started"])) / 1000, time.time() - float(diag["started"]) / 1000)
+    _event("sheet push: %d change(s) (%d values), %d applied%s" % (len(changes), len(cells), applied, timing))
+
+
 def reconcile(conn, snap):
     """Settle every difference between the sheet snapshot and the board, newest edit wins."""
+    caught, imported = [], set()  # imported: people first seen in this snapshot (their values aren't "missed")
+    label = {t.get("id"): "%s / %s" % (m.get("name"), t.get("name")) for m in snap.get("members") or [] for t in m.get("tasks") or []}
     cw = snap.get("currentWeek") if WEEK_RE.match(str(snap.get("currentWeek", ""))) else monday()
     # Board changes still waiting in the outbox will be delivered by the sender;
     # don't queue duplicates of them while it catches up.
@@ -359,8 +421,11 @@ def reconcile(conn, snap):
         cur = _member(conn, mid)
         sts = int(m.get("setupTs") or 0)
         change = dict(m, kind="setup", member=mid, ts=sts)
+        if cur is not None and not sts > cur[1]:
+            _mark_seen(conn, mid, [c.get("id") for c in m.get("cats") or []] + [t.get("id") for t in m.get("tasks") or []])
         if cur is None:
             apply_setup(conn, change, cw, force=True, created=base + i / 1000)
+            imported.add(mid)
         elif sts > cur[1]:
             apply_setup(conn, change, cw)
         elif cur[1] > sts and not queued:
@@ -402,9 +467,13 @@ def reconcile(conn, snap):
         if _same(sv, bv):
             continue
         bts = metas.get((mid, week, tid, d), 0)
-        if sts > bts or (sts == 0 and bts == 0):
+        # Equal stamps but different values: the sheet cell changed after the last synced
+        # write without being stamped (e.g. its edit trigger didn't run), so the sheet is newer.
+        if sts >= bts:
             if apply_cell(conn, {"member": mid, "week": week, "task": tid, "day": d, "value": sv, "ts": sts}, force=True):
                 logs.pop((mid, week), None)
+                if mid not in imported:
+                    caught.append("%s, %s %s = %s" % (label.get(tid, tid), week, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d], sv))
         elif not queued:
             _enqueue(conn, {"kind": "cell", "member": mid, "week": week, "task": tid, "day": d, "value": bv, "ts": bts})
 
@@ -425,13 +494,14 @@ def reconcile(conn, snap):
         if bt is not None and _same(sv, bt.get("target", 0)):
             continue
         bts = metas.get((mid, week, tid, TARGET), 0)
-        if bt is None or sts > bts or (sts == 0 and bts == 0):
+        if bt is None or sts >= bts:
             if apply_target(conn, {"member": mid, "week": week, "task": tid, "value": sv, "ts": sts}, cw, force=True):
                 logs.pop((mid, week), None)
                 members.pop(mid, None)
         elif not queued:
             _enqueue(conn, {"kind": "target", "member": mid, "week": week, "task": tid,
                             "value": bt.get("target", 0), "ts": bts})
+    _report_caught(caught, imported)
 
 
 # ---------- background threads ----------
@@ -466,6 +536,8 @@ def _drain():
                     conn.execute("DELETE FROM outbox WHERE id IN (%s)" % marks, ids)
                     state["lastPush"] = time.time()
                     _clear_error("push")
+                    for mid in res.get("refused") or []:  # e.g. the sheet's only person: keep them
+                        conn.execute("DELETE FROM tombstones WHERE member_id = ?", (mid,))
                     if res.get("skipped"):
                         log.info("sheet skipped: %s", res["skipped"])
                 else:
@@ -505,6 +577,8 @@ def pull_once(full=False):
     if not full:
         params["since"] = monday(RECENT_WEEKS)
     snap = _http(SCRIPT_URL + ("&" if "?" in SCRIPT_URL else "?") + urllib.parse.urlencode(params))
+    if snap.get("busy"):  # the sheet was busy with edits; this round is skipped, the next one follows
+        return
     if not snap.get("ok"):
         raise RuntimeError(snap.get("error") or "snapshot failed")
     conn = connect()
@@ -545,6 +619,13 @@ def start():
     _started = True
     threading.Thread(target=_sender_loop, name="sync-sender", daemon=True).start()
     threading.Thread(target=_reconcile_loop, name="sync-reconcile", daemon=True).start()
+
+
+def _report_caught(caught, imported=()):
+    if imported:
+        _event("imported %d person(s) from the sheet" % len(imported))
+    if caught:
+        _event("catch-up fetch applied %d sheet value(s) the instant push missed: %s" % (len(caught), "; ".join(caught[:8])))
 
 
 def status(conn):
