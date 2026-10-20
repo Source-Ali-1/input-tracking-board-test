@@ -171,6 +171,10 @@ def put_member(member_id):
         )
         week = str(body.get("week", ""))  # the week the editor was on; its KPIs start there
         sync.on_member_saved(conn, member_id, doc, ts, week if WEEK_RE.match(week) else None, changed_targets)
+        # Weeks already stored from then on get new inputs too (and the KPIs just set), as the sheet does.
+        start = max(week, sync.monday()) if WEEK_RE.match(week) else sync.monday()
+        retarget = set(changed_targets) if changed_targets is not None else {t["id"] for t in tasks}
+        sync.setup_to_logs(conn, member_id, cats, tasks, start, retarget)
         conn.commit()
     sync.kick()
     return jsonify({"ok": True})

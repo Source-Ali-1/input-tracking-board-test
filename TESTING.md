@@ -18,7 +18,7 @@ There are two ways to test:
 
 ## A. The simulation (no Google account)
 
-`tests/runall.sh` loads the real `apps-script/Code.gs` into a mock Google Sheet (`tests/mock.js`) with the tracker's layout (`tests/now.csv`). It then starts a local board that syncs with it and runs 14 test groups, checking every change in **both directions** (board → sheet and sheet → board).
+`tests/runall.sh` loads the real `apps-script/Code.gs` into a mock Google Sheet (`tests/mock.js`) with the tracker's layout (`tests/now.csv`). It then starts a local board that syncs with it and runs 16 test groups, checking every change in **both directions** (board → sheet and sheet → board).
 
 ```bash
 git checkout test-copies
@@ -26,13 +26,13 @@ pip install -r requirements.txt
 bash tests/runall.sh
 ```
 
-Expected result: one line per group and `TOTAL: 157 passed, 0 failed`.
+Expected result: one line per group and `TOTAL: 202 passed, 0 failed`.
 
 ```
 Main scenarios                   passes         (26 checks)
 ...
 Headings vs inputs               passes         (10 checks)
-TOTAL: 157 passed, 0 failed
+TOTAL: 202 passed, 0 failed
 ```
 
 **Run a single test group:**
@@ -44,7 +44,7 @@ HEADER_ARRAY=1 bash tests/restart.sh && python tests/formulas.py   # formulas.py
 bash tests/restart.sh stopall               # stop both when done
 ```
 
-While it runs, open the test board at <http://localhost:8099>. Logs and data go to `tests/.run/`, which git ignores.
+While it runs, open the test board at <http://localhost:8099>. If something else already uses ports 8090/8099 (e.g. a second test run), pick others: `MOCK_PORT=8190 BOARD_PORT=8199 bash tests/runall.sh`. Logs and data go to `tests/.run/`, which git ignores.
 
 | Test group | What it checks |
 |---|---|
@@ -53,12 +53,14 @@ While it runs, open the test board at <http://localhost:8099>. Logs and data go 
 | Stale board page | An old open board page doesn't undo newer edits |
 | Late trigger race | A slow sheet trigger doesn't overwrite a newer board edit |
 | Rows added by hand | A row inserted in the sheet becomes an input with formatting and formulas; the unit decides tick box vs number |
+| New input: KPI, total, Win-Loss | An input added on either side gets its KPI in this and the later weeks, a Week total and Win / Loss in every week, and its logged days on the other side; later KPIs are never overwritten |
 | Person added in sheet | A person block typed into the sheet appears on the board, and back |
 | Speed and missed pushes | How fast edits arrive; catch-up when a push is lost |
 | Edit without trigger | A sheet change no trigger reported still reaches the board |
 | Week total / Win-Loss formulas | No `#REF!`: every input row gets its own formulas for existing people, a new person, a new input, a person copied by hand, and a new week |
 | Headings vs inputs | Rows with no unit, no goal and no KPI (Content, Habits) are headings and don't count as KPIs |
 | No duplicate people | A person whose sheet block gets a new id, or is deleted in the sheet, isn't kept twice on the board |
+| Every duplicate scenario | 22 situations (adding, renaming, deleting and copying people on either side, inserted or deleted rows, lost id tags, either side offline, a board started from empty) each leave every person exactly once, with matching inputs, also after a catch-up |
 | Week added by hand (2) | A week added by hand isn't duplicated or overwritten |
 
 ---
@@ -112,6 +114,8 @@ Then try changes in **both directions** by hand:
 | Change a value on the board | Appears in the sheet; Week total and Win / Loss update |
 | Add a person on the board | A new block appears in the sheet, with Week total and Win / Loss working (no `#REF!`) |
 | Add an input on the board, or insert a row with name + unit in the sheet | Shows on the other side, with formulas in every week |
+| Give that new input a KPI (on the board, or in this week's Target cell in the sheet) | The KPI shows in this and the later weeks on both sides; Week total and Win / Loss work |
+| Log a few days for it on the board | They appear in the sheet; the board shows the total, progress and Win when the KPI is reached |
 | Look at a section heading (e.g. "Content") | It isn't counted in "x of y KPIs hit" on the board |
 
 When you're done, delete the script's triggers (**Triggers** page in Apps Script) and stop the board and the tunnel.

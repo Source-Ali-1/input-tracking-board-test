@@ -108,6 +108,7 @@ function collectEdit_(rg, edited) {
       if (stamp_(key) >= edited) continue; // the board wrote this cell after the edit: its value stands
       setStamp_(key, edited);
       changes.push(pos.day < 0 ? targetChange_(model, b, t, pos.week, edited) : cellChange_(model, b, t, pos.week, pos.day, edited));
+      if (pos.day < 0) carryKpi_(model, b, t, pos.week, num_(model.cell(r, c)), edited).forEach(x => changes.push(x));
     }
   }
   if (!structural) return changes;
@@ -241,7 +242,8 @@ function readModel_(cachedOnly) {
     const prev = i ? headers[i - 1] : 0;
     const cands = [h - 1, h - 2].filter(r => r > prev && r >= 1);
     const named = r => { const t = text(r, 1); return !!stripMonth_(t) && !MONTH_ROW_RE.test(t) && !/^input$/i.test(t); };
-    const tagged = cands.concat([h]).filter(r => md.member[r]);
+    // A row inserted between the name and month rows pushes the tagged name row to h - 3.
+    const tagged = cands.concat([h, h - 3].filter(r => r > prev && r >= 1)).filter(r => md.member[r]);
     const titleRow = tagged.find(named) || cands.find(named) || tagged[0] || cands[0] || h;
     // Two tags: keep the id the sync already knows (it has a stamp), so the board keeps its person.
     const known = r => stamp_(ks_(md.member[r].id)) > 0;
@@ -520,6 +522,7 @@ function applyBoardChanges_(changes) {
     const col = isTarget ? w.col : w.col + 1 + day, cur = model.cell(ref.task.row, col), v = num_(ch.value);
     if (num_(cur) !== v) writes.push({ row: ref.task.row, col, value: typeof cur === 'boolean' ? v > 0 : v });
     setStamp_(key, Number(ch.ts));
+    if (isTarget) carryKpi_(model, b, ref.task, w, v, Number(ch.ts)); // the board's later weeks already inherit it
     res.applied++;
   });
   flushWrites_(model.sh, writes);
@@ -660,10 +663,28 @@ function completeRow_(model, b, t) {
   sh.getRange(near.row, 1, 1, cols).copyTo(sh.getRange(t.row, 1, 1, cols), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
 }
 
+/**
+ * A KPI set for an input in week `w` fills that input's empty KPI cells in the later weeks (a new
+ * input otherwise has a KPI in one week only, and blank Win / Loss everywhere else). KPIs already
+ * there are never overwritten, and earlier weeks are left alone. Returns the target changes.
+ */
+function carryKpi_(model, b, t, w, value, ts) {
+  if (!(value > 0) || t.archived) return [];
+  const out = [], at = ts - 1; // just older than the edit, so a KPI set for that week in the same go wins
+  model.weeks.forEach(x => {
+    const cur = model.cell(t.row, x.col), key = kt_(b.id, x.week, t.id);
+    if (x.week <= w.week || (cur !== '' && cur !== null) || stamp_(key) >= at) return;
+    model.sh.getRange(t.row, x.col).setValue(value);
+    setStamp_(key, at);
+    out.push({ kind: 'target', member: b.id, week: x.week, task: t.id, value, ts: at });
+  });
+  return out;
+}
+
 // One formula per input row and week (Target | Mon..Sun | Total | Win / Loss), relative to its
 // own row, so rows, people and weeks copied by the script or by hand compute their own numbers.
-// A ticked box counts as 1. No KPI that week: both stay blank.
-const TOTAL_R1C1 = '=IF(RC[-8]="","",SUM(RC[-7]:RC[-1])+COUNTIF(RC[-7]:RC[-1],TRUE))';
+// A ticked box counts as 1. The total always shows (as on the board); Win / Loss needs a KPI.
+const TOTAL_R1C1 = '=SUM(RC[-7]:RC[-1])+COUNTIF(RC[-7]:RC[-1],TRUE)';
 const WINLOSS_R1C1 = '=IF(RC[-9]="","",IF(RC[-1]>=RC[-9],"Win",TEXT(IFERROR(RC[-1]/RC[-9],0),"0%")))';
 
 /**

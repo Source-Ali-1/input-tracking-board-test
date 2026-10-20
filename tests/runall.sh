@@ -11,7 +11,7 @@ python() { command "$PY" "$@"; }
 export -f python 2>/dev/null; export PY
 
 run() { # name, command, DATE_LABELS
-  mkdir -p .run; : > .run/board.log
+  mkdir -p ".run/${BOARD_PORT:-8099}"; : > ".run/${BOARD_PORT:-8099}/board.log"
   DATE_LABELS=$3 HEADER_ARRAY=$HEADER_ARRAY bash restart.sh
   out=$(eval "$2" 2>&1)
   p=$(echo "$out" | grep -c "^PASS"); f=$(echo "$out" | grep -c "^FAIL ")
@@ -31,12 +31,14 @@ run "Edge cases"                     "python edges.py" ""
 run "Stale board page"               "python stale.py" ""
 run "Late trigger race"              "python race.py" ""
 run "Rows added by hand"             "python newrow.py" ""
+run "New input: KPI, total, Win-Loss" "python newinput.py" ""
 run "Person added in sheet"          "python newperson.py" ""
 run "Speed and missed pushes"        "python latency.py" ""
 run "Edit without trigger"           "python untracked.py | sed 's/^board value reached sheet: True/PASS board->sheet/; s/^untracked sheet edit reached board via catch-up: True | sheet still 33: True/PASS untracked sheet edit caught up/'" ""
 HEADER_ARRAY=1 run "Week total / Win-Loss formulas" "python formulas.py" ""
 run "Headings vs inputs"             "python headings.py" ""
 run "No duplicate people"            "python duplicates.py" ""
+run "Every duplicate scenario"       "python dupscenarios.py" ""
 run "Week added by hand"             "python manualweek.py proper | grep -q \"'Mon 10/26'\" && echo PASS proper-format week kept, no duplicate" ""
 run "Week added by hand, odd format" "python manualweek.py odd | grep -q \"'Monday 26 Oct'\" && echo PASS odd-format week not overwritten" ""
 bash restart.sh stopall

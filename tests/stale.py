@@ -1,6 +1,6 @@
 """The board page saves from a stale copy right after sheet edits: the sheet edits must survive (both sides)."""
 import json, time, urllib.request, copy
-B, S = "http://localhost:8099", "http://localhost:8090"
+B, S = "http://localhost:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://localhost:" + __import__("os").getenv("MOCK_PORT", "8090")
 WK, W8 = "2026-10-19", 74
 fails = []
 

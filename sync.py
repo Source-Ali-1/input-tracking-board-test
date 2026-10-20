@@ -266,23 +266,30 @@ def apply_setup(conn, ch, current_week, force=False, created=None):
         "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
         (mid, json.dumps(data), created or time.time(), ts / 1000),
     )
-    # The current and future weeks show the new setup; their per-week targets and values stay.
+    setup_to_logs(conn, mid, cats, tasks, current_week)
+    if pending:
+        _enqueue(conn, _setup_change(mid, data, ts))
+    return 1
+
+
+def setup_to_logs(conn, mid, cats, tasks, from_week, retarget=()):
+    """The weeks from from_week on show the new setup; their per-week targets and values stay.
+
+    retarget: inputs whose KPIs were just set, so those weeks take the setup's KPI for them.
+    """
     ids = {t["id"] for t in tasks}
-    rows = conn.execute("SELECT week, data FROM logs WHERE member_id = ? AND week >= ?", (mid, current_week)).fetchall()
+    rows = conn.execute("SELECT week, data FROM logs WHERE member_id = ? AND week >= ?", (mid, from_week)).fetchall()
     for row in rows:
         lg = json.loads(row["data"])
         old_t = {t["id"]: t for t in lg.get("tasks", [])}
         new_tasks = []
         for t in tasks:
             nt = dict(t)
-            if t["id"] in old_t:
+            if t["id"] in old_t and t["id"] not in retarget:
                 nt["target"] = old_t[t["id"]].get("target", t["target"])
             new_tasks.append(nt)
         values = {k: v for k, v in (lg.get("values") or {}).items() if k in ids}
         _save_log(conn, mid, row["week"], {"cats": copy.deepcopy(cats), "tasks": new_tasks, "values": values})
-    if pending:
-        _enqueue(conn, _setup_change(mid, data, ts))
-    return 1
 
 
 def _mark_seen(conn, mid, ids):

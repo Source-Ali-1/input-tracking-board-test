@@ -2,8 +2,8 @@
 relative formula per input row, for existing people, a person added on the board, a person added by hand
 in the sheet, a new input, and a new week. Also: a new person's KPI is only written from this week on."""
 import json, re, time, urllib.request
-B, S = "http://localhost:8099", "http://localhost:8090"
-TOTAL = '=IF(RC[-8]="","",SUM(RC[-7]:RC[-1])+COUNTIF(RC[-7]:RC[-1],TRUE))'
+B, S = "http://localhost:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://localhost:" + __import__("os").getenv("MOCK_PORT", "8090")
+TOTAL = '=SUM(RC[-7]:RC[-1])+COUNTIF(RC[-7]:RC[-1],TRUE)'
 WL = '=IF(RC[-9]="","",IF(RC[-1]>=RC[-9],"Win",TEXT(IFERROR(RC[-1]/RC[-9],0),"0%")))'
 ARR_T = '={"Week total";ARRAYFORMULA(IF($BL$29:$BL$32="","",MMULT(N($BM$29:$BS$32),SEQUENCE(7,1,1,0))))}'
 ARR_W = '={"Win / Loss";ARRAYFORMULA($BT$29:$BT$32)}'

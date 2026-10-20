@@ -1,5 +1,5 @@
 import json, sys, time, urllib.request
-B, S = "http://localhost:8099", "http://localhost:8090"
+B, S = "http://localhost:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://localhost:" + __import__("os").getenv("MOCK_PORT", "8090")
 def req(url, method="GET", body=None):
     r = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(r, timeout=30) as res: return json.loads(res.read() or b"{}")

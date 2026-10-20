@@ -1,6 +1,6 @@
 """Timing: instant push, missed push (catch-up), and a burst of edits. Board catch-up interval = 10 s as in production."""
 import json, time, urllib.request
-B, S = "http://127.0.0.1:8099", "http://127.0.0.1:8090"
+B, S = "http://127.0.0.1:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://127.0.0.1:" + __import__("os").getenv("MOCK_PORT", "8090")
 WK, W8 = "2026-10-19", 74
 fails = []
 

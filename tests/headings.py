@@ -3,7 +3,7 @@ Headings with an old "input" tag (Content, Habits) or a stray logged number (Fin
 "Reading (30 Mins)" (KPI, no unit) and "Attention activity" (unit + goal) stay inputs; a bare input the
 board adds stays an input; values keep syncing both ways around the changed rows."""
 import json, time, urllib.request
-B, S = "http://localhost:8099", "http://localhost:8090"
+B, S = "http://localhost:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://localhost:" + __import__("os").getenv("MOCK_PORT", "8090")
 CW = "2026-10-19"
 fails = []
 

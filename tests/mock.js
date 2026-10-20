@@ -189,6 +189,7 @@ http.createServer((req, res) => {
         row.md = row.md.filter(m => m.key.indexOf('itb_') !== 0).concat([{ key: e.key, value: e.value, id: mdSeq++ }]);
         global.CACHE = {}; out = '{"ok":true}';
       }
+      else if (u.pathname === '/install') { global.CACHE = {}; api.withLock_(() => api.readModel_()); out = '{"ok":true}'; } // as installTriggers / checkSetup
       else if (u.pathname === '/tick') { api.syncTick(); out = JSON.stringify({ ok: true, props }); }
       else if (u.pathname === '/week') { if (u.searchParams.get('to')) { global.CACHE = {}; api.withLock_(() => api.ensureWeeksThrough_(u.searchParams.get('to'))); } else api.ensureCurrentWeek(); out = JSON.stringify({ ok: true }); }
       else if (u.pathname === '/dump') out = JSON.stringify({ rows: dump(), row1: tracker.rows[0].cells, props, log: log.splice(0), stamps: (ss.getSheetByName('_sync') || { rows: [] }).rows.filter(r => r.cells[0]).length });

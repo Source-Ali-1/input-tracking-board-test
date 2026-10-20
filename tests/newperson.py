@@ -1,6 +1,6 @@
 """Sheet-side: add a new person block by hand at the bottom, then check the board (and back)."""
 import json, time, urllib.request
-B, S = "http://localhost:8099", "http://localhost:8090"
+B, S = "http://localhost:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://localhost:" + __import__("os").getenv("MOCK_PORT", "8090")
 fails = []
 
 

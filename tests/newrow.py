@@ -1,5 +1,5 @@
 import json, time, urllib.request
-B, S = "http://localhost:8099", "http://localhost:8090"
+B, S = "http://localhost:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://localhost:" + __import__("os").getenv("MOCK_PORT", "8090")
 fails = []
 W8 = 74
 
@@ -39,7 +39,7 @@ def btask(name):
 
 dv = row("Daily vlog")
 check("installing the sync kept existing rows' look; Daily vlog got the standard Total / Win-Loss formulas",
-      dv["fmt"] == "" and dv["cells"][11].startswith("=IF(RC[-8]") and dv["cells"][12].startswith("=IF(RC[-9]"), dv["cells"][:20])
+      dv["fmt"] == "" and dv["cells"][11].startswith("=SUM(RC[-7]") and dv["cells"][12].startswith("=IF(RC[-9]"), dv["cells"][:20])
 
 yt = row("YouTube video")["row"]
 req(f"{S}/insertRow", "POST", {"after": yt})

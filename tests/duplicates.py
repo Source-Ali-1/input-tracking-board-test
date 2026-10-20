@@ -2,7 +2,7 @@
 carries a new id, or it was deleted in the sheet), the board drops its stale copy instead of keeping
 it (and re-sending it) forever. A person added on the board still reaches the sheet."""
 import json, time, urllib.request
-B, S = "http://localhost:8099", "http://localhost:8090"
+B, S = "http://localhost:" + __import__("os").getenv("BOARD_PORT", "8099"), "http://localhost:" + __import__("os").getenv("MOCK_PORT", "8090")
 CW = "2026-10-19"
 fails = []
 
