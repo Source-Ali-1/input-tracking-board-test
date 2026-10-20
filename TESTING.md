@@ -1,70 +1,18 @@
 # Testing the board ⇄ Google Sheet sync on copies
 
-Everything here runs on **copies**: a mock sheet or your own copy of the tracker, plus a board on your computer.
-Nothing touches the real tracker or the live board.
-
-There are two ways to test:
-
-- **A. The simulation.** About 12 minutes. No Google account needed. This is the quickest way to check that everything still works.
-- **B. Your own copy of the sheet.** About 20 minutes. This lets you click around in a real Google Sheet and a real board.
+Everything here runs on **copies**: your own copy of the tracker, plus a board on your computer.
+Nothing touches the real tracker or the live board. About 20 minutes.
 
 ## You need
 
+- **The tracker.** Ask for the original; you'll make your own copy of it.
 - **Python 3.10+.** Install Flask with `pip install -r requirements.txt`, ideally in a `.venv` in the repo folder.
-- **Node.js 18+** (runs the sheet script in the mock).
-- **bash and curl.** On Windows, use **Git Bash**, which has both.
+- **cloudflared** (a free tunnel, so Google can reach the board on your computer). `ngrok` works too.
+- **bash.** On Windows, use **Git Bash**.
 
 ---
 
-## A. The simulation (no Google account)
-
-`tests/runall.sh` loads the real `apps-script/Code.gs` into a mock Google Sheet (`tests/mock.js`) with the tracker's layout (`tests/now.csv`). It then starts a local board that syncs with it and runs 16 test groups, checking every change in **both directions** (board → sheet and sheet → board).
-
-```bash
-pip install -r requirements.txt
-bash tests/runall.sh
-```
-
-Expected result: one line per group and `TOTAL: 202 passed, 0 failed`.
-
-```
-Main scenarios                   passes         (26 checks)
-...
-Headings vs inputs               passes         (10 checks)
-TOTAL: 202 passed, 0 failed
-```
-
-**Run a single test group:**
-
-```bash
-bash tests/restart.sh                       # fresh mock sheet (port 8090) + board (port 8099)
-python tests/headings.py                    # or any other tests/*.py
-HEADER_ARRAY=1 bash tests/restart.sh && python tests/formulas.py   # formulas.py needs this mode
-bash tests/restart.sh stopall               # stop both when done
-```
-
-While it runs, open the test board at <http://localhost:8099>. If something else already uses ports 8090/8099 (e.g. a second test run), pick others: `MOCK_PORT=8190 BOARD_PORT=8199 bash tests/runall.sh`. Logs and data go to `tests/.run/`, which git ignores.
-
-| Test group | What it checks |
-|---|---|
-| Main scenarios (+ with dates) | Values, KPIs, inputs, people and new weeks syncing both ways; the later edit winning; edits made while the board is down |
-| Edge cases | Odd values, empty cells, renames, moves, removals |
-| Stale board page | An old open board page doesn't undo newer edits |
-| Late trigger race | A slow sheet trigger doesn't overwrite a newer board edit |
-| Rows added by hand | A row inserted in the sheet becomes an input with formatting and formulas; the unit decides tick box vs number |
-| New input: KPI, total, Win-Loss | An input added on either side gets its KPI in this and the later weeks, a Week total and Win / Loss in every week, and its logged days on the other side; later KPIs are never overwritten |
-| Person added in sheet | A person block typed into the sheet appears on the board, and back |
-| Speed and missed pushes | How fast edits arrive; catch-up when a push is lost |
-| Edit without trigger | A sheet change no trigger reported still reaches the board |
-| Week total / Win-Loss formulas | No `#REF!`: every input row gets its own formulas for existing people, a new person, a new input, a person copied by hand, and a new week |
-| Headings vs inputs | Rows with no unit, no goal and no KPI (Content, Habits) are headings and don't count as KPIs |
-| No duplicate people | A person whose sheet block gets a new id, or is deleted in the sheet, isn't kept twice on the board |
-| Every duplicate scenario | 22 situations (adding, renaming, deleting and copying people on either side, inserted or deleted rows, lost id tags, either side offline, a board started from empty) each leave every person exactly once, with matching inputs, also after a catch-up |
-| Week added by hand (2) | A week added by hand isn't duplicated or overwritten |
-
----
-
-## B. With your own copy of the sheet
+## Set it up from scratch
 
 **Always start from scratch: a fresh copy of the tracker and a blank board.** What the repo keeps is the code: the script (`apps-script/Code.gs`) and the board. The board's data (`data/board.sqlite3`, never in git) holds the people and ids of one particular sheet copy; reusing it with another copy makes duplicates and mismatches. A blank board takes everyone from the sheet with the sheet's own ids, so nobody is doubled.
 
@@ -86,7 +34,7 @@ While it runs, open the test board at <http://localhost:8099>. If something else
    cloudflared tunnel --url http://localhost:8080
    ```
 
-   It prints an `https://….trycloudflare.com` address. `ngrok http 8080` works too.
+   It prints an `https://….trycloudflare.com` address. Keep this terminal open: closing it changes the address.
 6. **Follow [apps-script/SETUP.md](apps-script/SETUP.md) steps 1, 2 and 4,** with these changes:
    - `BOARD_URL` = the tunnel address.
    - Skip step 3 (Railway). Instead, restart the board with the web app URL from step 2:
@@ -96,31 +44,23 @@ While it runs, open the test board at <http://localhost:8099>. If something else
      ```
 
 7. **Run `fixFormulas`** once from the Apps Script editor. It gives every input row its own Week total / Win-Loss formula.
-8. **Check it's working.** Open <http://localhost:8080>. Within about a minute, everyone in your copy appears. `http://localhost:8080/api/sync/status` should show `"enabled": true` and `"lastError": null`.
-9. **Test the connection both ways** with the checker:
-
-   ```bash
-   python tests/live_check.py --exec <the /exec URL> --secret <same secret> --board http://localhost:8080
-   ```
-
-   - It checks the board and the sheet's web app can reach each other and list the same people.
-   - It sets a value on the board and waits for it to arrive in your sheet (**board → sheet**).
-   - It then asks you to type a number into one named cell in your sheet and waits for it on the board (**sheet → board**).
-   - Finally it puts that cell back and confirms both sides still match after a catch-up.
-
-   It only touches Sunday of the current week for one input. Expected result: `All checks passed: the board and the sheet are connected both ways.`
+8. **Check it's working.** Open <http://localhost:8080>. Within about a minute, everyone in your copy appears, **once each**. `http://localhost:8080/api/sync/status` should show `"enabled": true`, `"outbox": 0` and `"lastError": null`.
 
 Then try changes in **both directions** by hand:
 
 | Try | Expected |
 |---|---|
-| Type a number in a Mon–Sun cell in the sheet | Shows on the board within a few seconds |
+| Type a number in a Mon–Sun cell in the sheet | Shows on the board within a few seconds (if you type fast, a few may take up to the next catch-up, about 10 s here) |
 | Change a value on the board | Appears in the sheet; Week total and Win / Loss update |
+| Change a weekly KPI on the board, or in a week's Target cell in the sheet | The other side shows the new KPI |
 | Add a person on the board | A new block appears in the sheet, with Week total and Win / Loss working (no `#REF!`) |
+| Delete that person on the board | Their block disappears from the sheet and doesn't come back |
 | Add an input on the board, or insert a row with name + unit in the sheet | Shows on the other side, with formulas in every week |
 | Give that new input a KPI (on the board, or in this week's Target cell in the sheet) | The KPI shows in this and the later weeks on both sides; Week total and Win / Loss work |
 | Log a few days for it on the board | They appear in the sheet; the board shows the total, progress and Win when the KPI is reached |
+| Rename an input on either side | Renamed on the other side |
 | Look at a section heading (e.g. "Content") | It isn't counted in "x of y KPIs hit" on the board |
+| Wait 2 minutes, reload both | Still one of each person on both sides |
 
 When you're done, delete the script's triggers (**Triggers** page in Apps Script) and stop the board and the tunnel.
 
@@ -133,7 +73,7 @@ To test again from scratch, or if anything looks doubled or mismatched:
 1. In Apps Script, **Triggers** page: delete all the script's triggers.
 2. Stop the board (Ctrl+C) and the tunnel, then delete the board's `data` folder.
 3. Make a **new** copy of the original tracker (don't reuse the old copy: it carries the old hidden ids).
-4. Follow part B again from step 1.
+4. Follow "Set it up from scratch" again from step 1.
 
 ---
 
@@ -151,4 +91,4 @@ To test again from scratch, or if anything looks doubled or mismatched:
 5. Run **`fixFormulas`** once from the function dropdown.
 
 Within about a minute, the board drops any stale copies of people (for example the same person listed twice).
-Run `python tests/live_check.py` again to confirm both directions work.
+Check step 8 above again to confirm it works.

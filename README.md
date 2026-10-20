@@ -7,15 +7,13 @@ A weekly inputs board (Flask + SQLite) that keeps a two-way sync with a Google S
 
 This repo is for **trying the sync on copies**. It never touches the real tracker or the live board.
 
-**Start here: [TESTING.md](TESTING.md)**
-
-- **No Google account:** run `bash tests/runall.sh`. It runs the real sheet script against a mock sheet and a local board, and checks every change in both directions. Expected: `TOTAL: 202 passed, 0 failed`.
-- **Your own copy of the sheet:** set up the script and a local board, then run `python tests/live_check.py` to check board → sheet and sheet → board.
+**Start here: [TESTING.md](TESTING.md).** You'll need your own copy of the tracker (ask for the original) and a blank board on your computer.
 
 | Path | What it is |
 |---|---|
 | `app.py`, `board.html` | the board (`python app.py`) |
 | `sync.py` | the board's side of the sync |
+| `requirements.txt` | what the board needs (Flask) |
 | `apps-script/Code.gs` | the sheet's side: paste into Extensions → Apps Script |
 | `apps-script/SETUP.md` | full setup of the sheet script |
-| `tests/` | the simulation and the live connection check |
+| `Procfile`, `railway.json` | how Railway runs the live board (not needed for testing) |
