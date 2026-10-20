@@ -234,13 +234,20 @@ function readModel_(cachedOnly) {
   for (let r = 1; r <= lastRow; r++) if (/^input$/i.test(text(r, 1))) headers.push(r);
   headers.forEach((h, i) => {
     // The name row is right above the header, or above a month row ("September 2026", "Oct").
-    // A row already tagged as this person's name row always wins.
-    let titleRow = h - 1;
-    if (md.member[h - 2] && !md.member[h - 1]) titleRow = h - 2;
-    else if (!md.member[h - 1] && h > 2 && (!stripMonth_(text(h - 1, 1)) || MONTH_ROW_RE.test(text(h - 1, 1)))) titleRow = h - 2;
-    if (titleRow < 1) titleRow = h;
+    // The person's id tag may sit on either of those two rows (or the header): it is kept wherever
+    // it is, so the person never gets a second id. The name always comes from the row that has one.
+    const prev = i ? headers[i - 1] : 0;
+    const cands = [h - 1, h - 2].filter(r => r > prev && r >= 1);
+    const named = r => { const t = text(r, 1); return !!stripMonth_(t) && !MONTH_ROW_RE.test(t) && !/^input$/i.test(t); };
+    const tagged = cands.concat([h]).filter(r => md.member[r]);
+    const titleRow = tagged.find(named) || cands.find(named) || tagged[0] || cands[0] || h;
+    // Two tags: keep the id the sync already knows (it has a stamp), so the board keeps its person.
+    const known = r => stamp_(ks_(md.member[r].id)) > 0;
+    const idRow = md.member[titleRow] && known(titleRow) ? titleRow
+      : tagged.find(known) || (md.member[titleRow] ? titleRow : tagged[0]) || titleRow;
+    tagged.forEach(r => { if (r !== idRow) { md.member[r].md.remove(); delete md.member[r]; } }); // one id per person
     const name = stripMonth_(text(titleRow, 1));
-    model.blocks.push({ name: name || 'Person ' + (i + 1), titleRow, headerRow: h, startRow: Math.min(titleRow, h), cats: [], tasks: [] });
+    model.blocks.push({ name: name || 'Person ' + (i + 1), titleRow, idRow, headerRow: h, startRow: Math.min(titleRow, idRow, h), cats: [], tasks: [] });
   });
   model.blocks.forEach((b, i) => { b.endRow = i + 1 < model.blocks.length ? model.blocks[i + 1].startRow - 1 : lastRow; });
 
@@ -260,7 +267,7 @@ function readModel_(cachedOnly) {
 
   model.blocks.forEach(b => {
     fresh = false;
-    b.id = claim('member', b.titleRow, 'm');
+    b.id = claim('member', b.idRow, 'm');
     let cat = null;
     b.lastUsedRow = b.headerRow;
     for (let r = b.headerRow + 1; r <= b.endRow; r++) {
@@ -486,7 +493,12 @@ function applyBoardChanges_(changes) {
           setStamp_(ks_(ch.member), Number(ch.ts));
           noteSetups_(readModel_(), ch.member);
           res.applied++;
-        } else res.stale++;
+        } else {
+          res.stale++;
+          // The sheet had this person (it has a newer stamp) but no longer has their block: they were
+          // deleted here, or their block now carries another id. The board drops its stale copy.
+          if (!model.blockById[ch.member]) (res.gone = res.gone || []).push(ch.member);
+        }
       } else {
         const why = deleteBlock_(ch.member);
         if (why) { res.skipped.push(why); (res.refused = res.refused || []).push(ch.member); } else res.applied++;
@@ -763,9 +775,8 @@ function deleteBlock_(id) {
   const next = model.blocks[model.blocks.indexOf(b) + 1];
   if (!next) return 'refused to delete the only person block (its header row defines the weeks)';
   const title = model.text(b.titleRow, 1), m = title.match(MONTH_YEAR_RE);
-  const row = sh.getRange(b.titleRow + ':' + b.titleRow);
-  row.getDeveloperMetadata().forEach(x => { if (x.getKey() === MD.member) x.remove(); });
-  row.addDeveloperMetadata(MD.member, next.id);
+  sh.getRange(b.idRow + ':' + b.idRow).getDeveloperMetadata().forEach(x => { if (x.getKey() === MD.member) x.remove(); });
+  sh.getRange(b.titleRow + ':' + b.titleRow).addDeveloperMetadata(MD.member, next.id);
   sh.getRange(b.titleRow, 1).setValue(next.name + (m ? m[0] : ''));
   sh.deleteRows(b.headerRow + 1, next.headerRow - b.headerRow);
   return null;

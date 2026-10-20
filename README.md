@@ -9,7 +9,7 @@ This repo is for **trying the sync on copies**. It never touches the real tracke
 
 **Start here: [TESTING.md](TESTING.md)**
 
-- **No Google account:** run `bash tests/runall.sh`. It runs the real sheet script against a mock sheet and a local board, and checks every change in both directions. Expected: `TOTAL: 141 passed, 0 failed`.
+- **No Google account:** run `bash tests/runall.sh`. It runs the real sheet script against a mock sheet and a local board, and checks every change in both directions. Expected: `TOTAL: 157 passed, 0 failed`.
 - **Your own copy of the sheet:** set up the script and a local board, then run `python tests/live_check.py` to check board → sheet and sheet → board.
 
 | Path | What it is |

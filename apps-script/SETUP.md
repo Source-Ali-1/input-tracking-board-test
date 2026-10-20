@@ -101,7 +101,7 @@ Notes:
 - **Tick box or number:** the **Unit** column decides. Unit `check` (or `done`, `yes/no`, `✓`) makes the input a daily tick box ("Done / not done") on the board; any other unit (`count`, `hours`, `posts`…) makes it a number. Changing the unit in the sheet changes the type; a type picked on the board in *Edit inputs* is kept until the unit changes.
 - **Adding an input in the sheet:** insert a row in the section and type the name, goal and unit. The script gives the new row the formatting of the input row next to it and the Week total / Win-Loss formulas; fill in the Week KPI yourself. Every input row has its own formulas (run `fixFormulas` once after installing to convert older sheets).
 - **Removing an input on the board:** the row is **struck through** in the sheet rather than deleted, so past weeks keep their numbers.
-- **Removing a person:** do it on the board, which deletes their block in the sheet. If you delete a block in the sheet by hand, the board puts it back.
+- **Removing a person:** do it on the board, which deletes their block in the sheet. If you delete a block in the sheet by hand, the board removes that person too (unless someone edited them on the board since).
 - **Reordering inputs:** changing the order on the board doesn't reorder sheet rows.
 - **Week labels:** keep the week labels in row 1 in the form `Week 8, 10/19 to 10/25`. The script finds the weeks by those labels.
 - **Hidden `_sync` tab:** the script uses a hidden `_sync` tab to store edit timestamps. Don't edit or delete it.

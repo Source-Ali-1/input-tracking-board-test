@@ -18,7 +18,7 @@ There are two ways to test:
 
 ## A. The simulation (no Google account)
 
-`tests/runall.sh` loads the real `apps-script/Code.gs` into a mock Google Sheet (`tests/mock.js`) with the tracker's layout (`tests/now.csv`). It then starts a local board that syncs with it and runs 13 test groups, checking every change in **both directions** (board → sheet and sheet → board).
+`tests/runall.sh` loads the real `apps-script/Code.gs` into a mock Google Sheet (`tests/mock.js`) with the tracker's layout (`tests/now.csv`). It then starts a local board that syncs with it and runs 14 test groups, checking every change in **both directions** (board → sheet and sheet → board).
 
 ```bash
 git checkout test-copies
@@ -26,13 +26,13 @@ pip install -r requirements.txt
 bash tests/runall.sh
 ```
 
-Expected result: one line per group and `TOTAL: 141 passed, 0 failed`.
+Expected result: one line per group and `TOTAL: 157 passed, 0 failed`.
 
 ```
 Main scenarios                   passes         (26 checks)
 ...
 Headings vs inputs               passes         (10 checks)
-TOTAL: 141 passed, 0 failed
+TOTAL: 157 passed, 0 failed
 ```
 
 **Run a single test group:**
@@ -58,6 +58,7 @@ While it runs, open the test board at <http://localhost:8099>. Logs and data go 
 | Edit without trigger | A sheet change no trigger reported still reaches the board |
 | Week total / Win-Loss formulas | No `#REF!`: every input row gets its own formulas for existing people, a new person, a new input, a person copied by hand, and a new week |
 | Headings vs inputs | Rows with no unit, no goal and no KPI (Content, Habits) are headings and don't count as KPIs |
+| No duplicate people | A person whose sheet block gets a new id, or is deleted in the sheet, isn't kept twice on the board |
 | Week added by hand (2) | A week added by hand isn't duplicated or overwritten |
 
 ---
@@ -114,3 +115,21 @@ Then try changes in **both directions** by hand:
 | Look at a section heading (e.g. "Content") | It isn't counted in "x of y KPIs hit" on the board |
 
 When you're done, delete the script's triggers (**Triggers** page in Apps Script) and stop the board and the tunnel.
+
+---
+
+## Already set up? Getting an update
+
+1. Get the new code:
+
+   ```bash
+   git pull
+   ```
+
+2. Stop the board and start it again with the same command as before.
+3. In Apps Script, replace all of `Code.gs` with the new `apps-script/Code.gs` and press **Save**.
+4. Go to **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The `/exec` URL stays the same.
+5. Run **`fixFormulas`** once from the function dropdown.
+
+Within about a minute, the board drops any stale copies of people (for example the same person listed twice).
+Run `python tests/live_check.py` again to confirm both directions work.

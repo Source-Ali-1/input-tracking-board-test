@@ -514,6 +514,20 @@ def _http(url, body=None):
         return json.loads(res.read().decode("utf-8"))
 
 
+def _forget(conn, mid, sent_ts):
+    """The sheet no longer has this person (deleted there, or re-created under a new id): drop the
+    board's stale copy, unless it was edited on the board after the setup the sheet turned down."""
+    cur = _member(conn, mid)
+    if not cur or cur[1] > sent_ts:
+        return
+    for table in ("members", "logs", "cell_meta", "seen"):
+        conn.execute("DELETE FROM %s WHERE %s = ?" % (table, "id" if table == "members" else "member_id"), (mid,))
+    for row in conn.execute("SELECT id, payload FROM outbox").fetchall():
+        if json.loads(row["payload"]).get("member") == mid:
+            conn.execute("DELETE FROM outbox WHERE id = ?", (row["id"],))
+    _event("removed %s from the board: the sheet no longer has this person" % (cur[0].get("name") or mid))
+
+
 def _drain():
     """Send the outbox to the sheet in order. False when the sheet couldn't be reached."""
     conn = connect()
@@ -531,9 +545,16 @@ def _drain():
                 res = {"ok": False, "error": "unreadable response (%s)" % e}
             ids = [r["id"] for r in rows]
             marks = ",".join("?" * len(ids))
+            sent = {}  # member -> newest setup stamp in this batch
+            for r in rows:
+                ch = json.loads(r["payload"])
+                if ch.get("kind") == "setup":
+                    sent[ch.get("member")] = max(sent.get(ch.get("member"), 0), int(ch.get("ts") or 0))
             with LOCK:
                 if res.get("ok"):
                     conn.execute("DELETE FROM outbox WHERE id IN (%s)" % marks, ids)
+                    for mid in res.get("gone") or []:
+                        _forget(conn, mid, sent.get(mid, 0))
                     state["lastPush"] = time.time()
                     _clear_error("push")
                     for mid in res.get("refused") or []:  # e.g. the sheet's only person: keep them
