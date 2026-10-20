@@ -21,7 +21,6 @@ There are two ways to test:
 `tests/runall.sh` loads the real `apps-script/Code.gs` into a mock Google Sheet (`tests/mock.js`) with the tracker's layout (`tests/now.csv`). It then starts a local board that syncs with it and runs 16 test groups, checking every change in **both directions** (board → sheet and sheet → board).
 
 ```bash
-git checkout test-copies
 pip install -r requirements.txt
 bash tests/runall.sh
 ```
@@ -67,14 +66,19 @@ While it runs, open the test board at <http://localhost:8099>. If something else
 
 ## B. With your own copy of the sheet
 
-1. **Copy the sheet.** Open the tracker, go to **File → Make a copy**, and open your copy.
+**Always start from scratch: a fresh copy of the tracker and a blank board.** What the repo keeps is the code: the script (`apps-script/Code.gs`) and the board. The board's data (`data/board.sqlite3`, never in git) holds the people and ids of one particular sheet copy; reusing it with another copy makes duplicates and mismatches. A blank board takes everyone from the sheet with the sheet's own ids, so nobody is doubled.
+
+1. **Copy the sheet.** Open the **original** tracker (not a copy someone already synced), go to **File → Make a copy**, and open your copy.
 2. **Find its ids.** The copy's URL looks like `docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit#gid=<TAB_GID>`.
 3. **Add the script.** Go to **Extensions → Apps Script** and paste in `apps-script/Code.gs`. At the top, set `SPREADSHEET_ID` and `TAB_GID` to **your copy's** values.
-4. **Start a board on your computer:**
+4. **Start a blank board on your computer.** Delete the `data` folder first if it exists from an earlier run, so the board starts with nobody on it:
 
    ```bash
+   rm -rf data
    SYNC_SECRET=pick-any-long-random-string PORT=8080 python app.py
    ```
+
+   Open http://localhost:8080: it must show nobody. Don't add anyone on the board until the first sync has brought everyone over (brand-new people are fine after that).
 
 5. **Let Google reach it.** Google can't call `localhost`, so open a free tunnel in a second terminal:
 
@@ -119,6 +123,17 @@ Then try changes in **both directions** by hand:
 | Look at a section heading (e.g. "Content") | It isn't counted in "x of y KPIs hit" on the board |
 
 When you're done, delete the script's triggers (**Triggers** page in Apps Script) and stop the board and the tunnel.
+
+---
+
+## Starting over
+
+To test again from scratch, or if anything looks doubled or mismatched:
+
+1. In Apps Script, **Triggers** page: delete all the script's triggers.
+2. Stop the board (Ctrl+C) and the tunnel, then delete the board's `data` folder.
+3. Make a **new** copy of the original tracker (don't reuse the old copy: it carries the old hidden ids).
+4. Follow part B again from step 1.
 
 ---
 
