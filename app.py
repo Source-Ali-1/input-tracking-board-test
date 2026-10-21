@@ -293,6 +293,19 @@ def sync_status():
     return jsonify(sync.status(get_db()))
 
 
+@app.route("/api/sync/check")
+def sync_check():
+    """For the sheet's setup wizard: who is on the board, and the sync state."""
+    if not sync.SECRET:
+        return jsonify({"ok": False, "error": "no-secret"}), 503
+    if not hmac.compare_digest(request.headers.get("X-Sync-Secret", ""), sync.SECRET):
+        abort(401)
+    conn = get_db()
+    members = [{"id": r["id"], "name": json.loads(r["data"]).get("name", "")}
+               for r in conn.execute("SELECT id, data FROM members ORDER BY created_at")]
+    return jsonify({"ok": True, "members": members, "sync": sync.status(conn)})
+
+
 init_db()
 sync.configure(DB_PATH, clean_setup)
 sync.start()

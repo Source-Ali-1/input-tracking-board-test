@@ -183,6 +183,7 @@ http.createServer((req, res) => {
         });
         out = '{"ok":true}';
       } else if (u.pathname === '/deleteRow') { const e = JSON.parse(body); tracker.deleteRows(e.row, 1); api.handleChange({ changeType: 'REMOVE_ROW' }); out = '{"ok":true}'; }
+      else if (u.pathname === '/unstrike') { const e = JSON.parse(body); tracker.getRange(e.row, 1, 1, 3).setFontLine('none'); if (!e.noTrigger) api.handleChange({ changeType: 'FORMAT' }); out = '{"ok":true}'; } // strike taken off by hand
       else if (u.pathname === '/moveRow') { const e = JSON.parse(body); tracker.moveRows(tracker.getRange(e.row + ':' + e.row), e.dest); api.handleChange({ changeType: 'OTHER' }); out = '{"ok":true}'; }
       else if (u.pathname === '/insertRow') { // inherit: copy the strike of the row above, as Google Sheets copies formatting
         const e = JSON.parse(body); tracker.insertRowAfter(e.after);

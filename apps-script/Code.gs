@@ -1,8 +1,9 @@
 /**
  * Input Tracking Board <-> Google Sheet two-way sync (sheet side).
  *
- * Paste into Extensions > Apps Script of the tracker spreadsheet, set the
- * script properties BOARD_URL and SYNC_SECRET, run installTriggers() once and
+ * Paste into Extensions > Apps Script of the tracker spreadsheet, reload the
+ * sheet and run Board sync > Set up the sync (the wizard saves BOARD_URL,
+ * SYNC_SECRET and the tab, checks the board and installs the triggers), then
  * deploy as a web app. See SETUP.md.
  *
  *   sheet edit  -> handleEdit (installable onEdit) -> POST {BOARD_URL}/api/sync/inbound
@@ -26,6 +27,7 @@
  */
 
 const CONFIG = {
+  // The setup wizard overrides both with the spreadsheet and tab it is run in.
   // LOCAL TEST: your copy. Switch back to 1B5wWCAhUaPApbTRGekl6QuFzd5BUl0qtYJ0UOj85MC0 (the real tracker) after testing.
   SPREADSHEET_ID: '1n9YNg9ZCJOK8oWQbdBsCtu-n730Vc_dQt44-_SOz23U',
   TAB_GID: 1594333729,   // the tracker tab
@@ -79,7 +81,7 @@ function doPost(e) {
 
 /** Installable onEdit trigger: push the edited cells to the board right away. */
 function handleEdit(e) {
-  if (!e || !e.range || e.range.getSheet().getSheetId() !== CONFIG.TAB_GID) return;
+  if (!e || !e.range || e.range.getSheet().getSheetId() !== tabGid_()) return;
   // When the edit happened. Runs of this trigger queue up behind each other, so the time a run
   // gets to work can be many seconds later; stamping with that would let an older sheet edit
   // overwrite a board entry made while it waited.
@@ -94,15 +96,16 @@ function collectEdit_(rg, edited) {
   let model = readModel_();
   const now = Date.now();
   const r1 = Math.min(rg.getLastRow(), model.lastRow), c1 = Math.min(rg.getLastColumn(), Math.max(model.lastCol, 3));
-  const changes = [];
+  let changes = [];
   // Typing in a struck-through row (an input or section removed on the board) brings it back: the
-  // strike and the "removed" tag go, and the board gets the input again with what was typed.
-  let revived = false;
+  // strike and the "removed" tag go, and the board gets the input again with all its numbers.
+  const struck = [];
   for (let r = rg.getRow(); r <= r1; r++) {
     const b = blockOf_(model, r), t = model.taskAt[r], c = b && b.cats.find(x => x.row === r);
-    if ((t && t.archived) || (c && c.archived)) { setArchived_(model.sh, r, false); revived = true; }
+    if ((t && t.archived) || (c && c.archived)) struck.push(r);
   }
-  if (revived) { bumpStructure_(); model = readModel_(); }
+  const revived = struck.length > 0;
+  if (revived) { const rv = revive_(model, struck, edited - 1); model = rv.model; changes = rv.changes; }
   let structural = revived || Object.keys(NEW_SETUP).length > 0;
   for (let r = rg.getRow(); r <= r1; r++) {
     const b = blockOf_(model, r);
@@ -130,7 +133,17 @@ function collectEdit_(rg, edited) {
 
 /** Installable onChange trigger: rows inserted, deleted, moved or sorted can change a person's inputs. */
 function handleChange(e) {
-  if (!e || e.changeType === 'EDIT' || e.changeType === 'FORMAT') return;
+  if (!e || e.changeType === 'EDIT') return;
+  if (e.changeType === 'FORMAT') { // e.g. the strike taken off a removed row by hand
+    // Most formatting has nothing to do with the sync: check without the lock first, so edits never wait on it.
+    const quick = readModel_(true);
+    STAMPS = null;
+    if (!quick || !unstruckRows_(quick).length) return; // an uncached layout is left to syncTick
+    let out = [];
+    withLock_(() => { out = unstruckChanges_(readModel_()); });
+    pushToBoard_(out);
+    return;
+  }
   withLock_(() => pushToBoard_(noteSetups_(readModel_())));
 }
 
@@ -143,7 +156,10 @@ function syncTick() {
       ensureFormulas_(readModel_());
       cache.put('formulasChecked', '1', 1800);
     }
-    pushToBoard_(noteSetups_(readModel_())); // anything about people's rows that changed unnoticed
+    // A strike taken off by hand that no trigger reported (that includes the setups), else anything
+    // about people's rows that changed unnoticed.
+    const m = readModel_(), back = unstruckChanges_(m);
+    pushToBoard_(back.length ? back : noteSetups_(m));
     const sp = PropertiesService.getScriptProperties();
     const since = Number(sp.getProperty('BACKLOG_SINCE') || 0);
     if (!since) return;
@@ -200,6 +216,324 @@ function checkSetup() {
       b.cats.length + ' sections, ' + b.tasks.length + ' inputs'));
   });
 }
+
+// ======================= setup wizard =======================
+//
+// Board sync > Set up the sync opens a sidebar that saves the board's address, the secret and the
+// tracker tab, checks the board, and installs the triggers. It refuses to install while the board
+// has someone who is also in the sheet under another id: the sync matches people only by id, so
+// that person would end up on both sides twice.
+
+/** Simple trigger: adds the Board sync menu. */
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('Board sync')
+    .addItem('Set up the sync', 'openSetupWizard')
+    .addToUi();
+}
+
+function openSetupWizard() {
+  SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutput(WIZARD_HTML).setTitle('Board sync setup'));
+}
+
+/** What the sidebar shows when it opens. */
+function wizardState() {
+  const ss = SpreadsheetApp.getActive(), sp = PropertiesService.getScriptProperties();
+  const savedId = sp.getProperty('SPREADSHEET_ID');
+  const here = savedId ? savedId === ss.getId() : CONFIG.SPREADSHEET_ID === ss.getId();
+  const sheets = ss.getSheets().filter(s => s.getName() !== CONFIG.STAMP_TAB);
+  // The saved tab, else the one with the most person blocks.
+  let gid = here && sheets.some(s => s.getSheetId() === tabGid_()) ? tabGid_() : null;
+  if (gid === null) {
+    let most = -1;
+    sheets.forEach(s => { const n = sheetPeople_(s).length; if (n > most) { most = n; gid = s.getSheetId(); } });
+  }
+  return {
+    tabs: sheets.map(s => ({ gid: s.getSheetId(), name: s.getName() })), tabGid: gid,
+    url: here ? props_().url : '', secretSet: here && !!props_().secret,
+    triggers: here ? ScriptApp.getProjectTriggers().length : 0,
+    // Someone else's triggers aren't visible here: only their name is.
+    triggersOwner: here && sp.getProperty('INSTALLED_BY') && sp.getProperty('INSTALLED_BY') !== Session.getEffectiveUser().getEmail() ? sp.getProperty('INSTALLED_BY') : '',
+    otherSheet: !here && !!savedId // set up for another spreadsheet before
+  };
+}
+
+/** Checks the board and compares its people with the sheet's. Changes nothing. */
+function wizardCheck(f) {
+  const out = { problems: [], warnings: [], boardOnly: [], sheetPeople: [], boardCount: 0 };
+  const sh = SpreadsheetApp.getActive().getSheets().find(s => s.getSheetId() === Number(f.tabGid));
+  if (!sh) { out.problems.push('Pick the tracker tab.'); return out; }
+  const people = sheetPeople_(sh);
+  out.sheetPeople = people.map(p => p.name);
+  if (!people.length) out.problems.push('No people found on "' + sh.getName() + '". Each person needs a row starting with "Input" under their name.');
+
+  const url = wizardUrl_(f), secret = wizardSecret_(f);
+  if (!/^https:\/\/\S+$/.test(url)) { out.problems.push('The board address must start with https:// (for a board on your computer, the tunnel address).'); return out; }
+  if (!secret) { out.problems.push('Type the secret: the same SYNC_SECRET the board was started with.'); return out; }
+
+  const board = boardCheck_(url, secret);
+  if (board.error) { out.problems.push(board.error); return out; }
+  out.boardCount = board.members.length;
+
+  const sheetIds = {}, sheetNames = {};
+  people.forEach(p => { if (p.id) sheetIds[p.id] = true; sheetNames[nameKey_(p.name)] = true; });
+  board.members.forEach(m => {
+    if (sheetIds[m.id]) return; // already linked to this sheet
+    if (sheetNames[nameKey_(m.name)]) {
+      out.problems.push('"' + m.name + '" is on the board and in the sheet as two separate people, so they would show up twice. ' +
+        'Delete ' + m.name + ' on the board first (anything logged only on the board for them is lost, so copy it into the sheet if you need it).');
+    } else {
+      out.boardOnly.push(m.name || '(no name)');
+    }
+  });
+  if (out.boardOnly.length) out.warnings.push('Only on the board: ' + out.boardOnly.join(', ') + '. They will be added to the sheet as new people. Delete them on the board first if they are test or old people.');
+  return out;
+}
+
+/** Saves the settings and installs the triggers, if the check passes. */
+function wizardInstall(f) {
+  const out = wizardCheck(f);
+  if (!out.problems.length && out.boardOnly.length && !f.addBoardOnly) out.problems.push('Tick the box to add the board-only people to the sheet, or delete them on the board first.');
+  // Triggers belong to the account that made them, and installTriggers only replaces its own. A second
+  // editor installing would leave the first one's triggers running too, so every edit synced twice.
+  const sp = PropertiesService.getScriptProperties(), owner = sp.getProperty('INSTALLED_BY'), me = Session.getEffectiveUser().getEmail();
+  if (!out.problems.length && owner && owner !== me && sp.getProperty('SPREADSHEET_ID') === SpreadsheetApp.getActive().getId()) {
+    out.problems.push('The sync was installed by ' + owner + ', and their triggers keep running, so installing again as ' + (me || 'you') +
+      ' would run everything twice. Ask ' + owner + ' to install it, or to delete their triggers (Apps Script, Triggers page) and the INSTALLED_BY script property first.');
+  }
+  if (out.problems.length) return out;
+  sp.setProperties({
+    INSTALLED_BY: me,
+    BOARD_URL: wizardUrl_(f),
+    SYNC_SECRET: wizardSecret_(f),
+    SPREADSHEET_ID: SpreadsheetApp.getActive().getId(),
+    TAB_GID: String(Number(f.tabGid))
+  });
+  SS = null;
+  bumpStructure_(); // the tab may have changed: read it afresh
+  installTriggers(); // replaces any triggers from before, so running the wizard again never doubles them
+  withLock_(() => ensureFormulas_(readModel_())); // what fixFormulas does
+  out.installed = true;
+  out.triggers = ScriptApp.getProjectTriggers().length;
+  let webApp = '';
+  try { webApp = ScriptApp.getService().getUrl() || ''; } catch (err) { /* not deployed yet */ }
+  out.webAppUrl = /\/exec$/.test(webApp) ? webApp : '';
+  return out;
+}
+
+/** After SHEET_SCRIPT_URL is set on the board: is the sync running, and is everyone there once? */
+function wizardStatus() {
+  const p = props_();
+  if (!p.url || !p.secret) return { problems: ['Install the sync first.'] };
+  const board = boardCheck_(p.url, p.secret);
+  if (board.error) return { problems: [board.error] };
+  const seen = {}, twice = [];
+  board.members.forEach(m => { const k = nameKey_(m.name); if (seen[k] && twice.indexOf(m.name) < 0) twice.push(m.name); seen[k] = true; });
+  return { problems: [], sync: board.sync || {}, boardPeople: board.members.map(m => m.name), twice, sheetCount: sheetPeople_(tab_()).length };
+}
+
+function wizardUrl_(f) { return String(f.url || '').trim().replace(/\/+$/, ''); }
+
+/** The typed secret, else the saved one (the sidebar never receives the saved secret). */
+function wizardSecret_(f) {
+  const typed = String(f.secret || '').trim();
+  if (typed) return typed;
+  return PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID') === SpreadsheetApp.getActive().getId() ? props_().secret : '';
+}
+
+/** GET {url}/api/sync/check: the board's people and sync state, or the problem in plain words. */
+function boardCheck_(url, secret) {
+  let res;
+  try {
+    res = UrlFetchApp.fetch(url + '/api/sync/check', { muteHttpExceptions: true, headers: { 'X-Sync-Secret': secret } });
+  } catch (err) {
+    return { error: 'Can\'t reach the board at ' + url + '. Check the address and that the board is running.' };
+  }
+  const code = res.getResponseCode();
+  if (code === 404) return { error: 'The board at ' + url + ' doesn\'t have the sync code yet. Ship sync.py and app.py to it first (SETUP.md step 1).' };
+  if (code === 503) return { error: 'The board has no SYNC_SECRET yet. Set it on the board first (SETUP.md step 1), then check again.' };
+  if (code === 401) return { error: 'The secret doesn\'t match the board\'s SYNC_SECRET.' };
+  if (code !== 200) return { error: 'The board answered HTTP ' + code + '.' };
+  try {
+    const body = JSON.parse(res.getContentText());
+    return { members: body.members || [], sync: body.sync || null };
+  } catch (err) {
+    return { error: 'The board\'s answer wasn\'t readable. Is ' + url + ' the board\'s address?' };
+  }
+}
+
+/**
+ * The person blocks of a tab with their ids, read only: unlike readModel_ it never tags rows,
+ * so the wizard can look before anything is installed.
+ */
+function sheetPeople_(sh) {
+  const lastRow = sh.getLastRow();
+  if (lastRow < 1) return [];
+  const shown = sh.getRange(1, 1, lastRow, 1).getDisplayValues();
+  const text = r => (r >= 1 && r <= lastRow) ? String(shown[r - 1][0]).trim() : '';
+  const ids = {};
+  sh.createDeveloperMetadataFinder().withLocationType(SpreadsheetApp.DeveloperMetadataLocationType.ROW).withKey(MD.member).find()
+    .forEach(m => { const r = m.getLocation().getRow().getRow(); if (!(r in ids)) ids[r] = m.getValue(); }); // first tag per row, as rowMetadata_
+  // Ids the sync already knows (they have a stamp in the hidden tab), read without creating the tab.
+  const known = {}, st = sh.getParent().getSheetByName(CONFIG.STAMP_TAB);
+  if (st && st.getLastRow()) st.getRange(1, 1, st.getLastRow(), 2).getValues().forEach(r => { if (/^s\|/.test(r[0]) && Number(r[1]) > 0) known[String(r[0]).slice(2)] = true; });
+  const headers = [];
+  for (let r = 1; r <= lastRow; r++) if (/^input$/i.test(text(r))) headers.push(r);
+  // Same choice of name row and id row as readModel_, so the ids compared are the ones the sync keeps.
+  return headers.map((h, i) => {
+    const prev = i ? headers[i - 1] : 0;
+    const cands = [h - 1, h - 2].filter(r => r > prev && r >= 1);
+    const named = r => { const t = text(r); return !!stripMonth_(t) && !MONTH_ROW_RE.test(t) && !/^input$/i.test(t); };
+    const tagged = cands.concat([h, h - 3].filter(r => r > prev && r >= 1)).filter(r => ids[r]);
+    const titleRow = tagged.find(named) || cands.find(named) || tagged[0] || cands[0] || h;
+    const isKnown = r => !!known[ids[r]];
+    const idRow = ids[titleRow] && isKnown(titleRow) ? titleRow
+      : tagged.find(isKnown) || (ids[titleRow] ? titleRow : tagged[0]);
+    return { name: stripMonth_(text(titleRow)) || 'Person ' + (i + 1), id: idRow ? ids[idRow] : '' };
+  });
+}
+
+function nameKey_(s) { return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+
+const WIZARD_HTML = `<!doctype html>
+<html><head><base target="_top"><style>
+  body { font: 13px/1.45 Arial, sans-serif; color: #202124; margin: 0; padding: 12px 16px 24px; }
+  h3 { font-size: 13px; margin: 20px 0 8px; }
+  #setup h3 { margin-top: 4px; }
+  label { display: block; margin: 12px 0 4px; font-weight: bold; }
+  input[type=text], input[type=password], select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #c4c7c5; border-radius: 4px; font: inherit; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }
+  .hint { color: #5f6368; font-size: 12px; margin-top: 4px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row input { flex: 1; }
+  button { font: inherit; padding: 8px 16px; border-radius: 4px; border: 1px solid #c4c7c5; background: #fff; color: #202124; cursor: pointer; min-height: 36px; }
+  button.primary { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 8px; margin-top: 16px; }
+  .box { border-radius: 4px; padding: 8px 12px; margin-top: 12px; }
+  .box p { margin: 4px 0; }
+  .bad { background: #fce8e6; color: #a50e0e; }
+  .warn { background: #fef7e0; color: #7a4f01; }
+  .good { background: #e6f4ea; color: #0d652d; }
+  .tick { display: flex; gap: 8px; align-items: flex-start; font-weight: normal; }
+  ol { padding-left: 20px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  code { background: #f1f3f4; padding: 1px 4px; border-radius: 3px; word-break: break-all; }
+  .hidden { display: none; }
+</style></head><body>
+<div id="setup">
+  <h3>1. Connect to the board</h3>
+  <div class="hint">The board must already run the sync code with a <code>SYNC_SECRET</code> (SETUP.md step 1).</div>
+  <label for="tab">Tracker tab</label>
+  <select id="tab"></select>
+  <label for="url">Board address</label>
+  <input type="text" id="url" placeholder="https://your-board.up.railway.app" autocomplete="off">
+  <label for="secret">Secret</label>
+  <div class="row"><input type="password" id="secret" autocomplete="off"><button id="show" type="button">Show</button></div>
+  <div class="hint" id="secretHint">The same value as the board's SYNC_SECRET.</div>
+  <div class="actions"><button class="primary" id="check">Check</button></div>
+  <div id="checkOut"></div>
+  <div id="installBox" class="hidden">
+    <label class="tick hidden" id="boardOnlyTick"><input type="checkbox" id="addBoardOnly"> Add the board-only people to the sheet</label>
+    <div class="actions"><button class="primary" id="install">Install the sync</button></div>
+  </div>
+</div>
+<div id="after" class="hidden">
+  <h3>2. Let the board write to the sheet</h3>
+  <ol>
+    <li>In Apps Script: <b>Deploy → New deployment</b>, type <b>Web app</b>, Execute as <b>Me</b>, Who has access <b>Anyone</b>, then <b>Deploy</b>.</li>
+    <li id="urlLine">Copy the Web app URL (it ends in <code>/exec</code>).</li>
+    <li>Set it on the board as <code>SHEET_SCRIPT_URL</code> (Railway: Variables; on your computer: restart the board with it).</li>
+  </ol>
+  <h3>3. Check it works</h3>
+  <div class="hint">Wait about a minute after the board restarts.</div>
+  <div class="actions"><button class="primary" id="status">Check the connection</button></div>
+  <div id="statusOut"></div>
+</div>
+<script>
+  const $ = id => document.getElementById(id);
+  function form() { return { tabGid: $('tab').value, url: $('url').value, secret: $('secret').value, addBoardOnly: $('addBoardOnly').checked }; }
+  function box(cls, lines) {
+    const d = document.createElement('div');
+    d.className = 'box ' + cls;
+    lines.forEach(t => { const p = document.createElement('p'); p.textContent = t; d.appendChild(p); });
+    return d;
+  }
+  function busy(btn, on, label) { btn.disabled = on; btn.textContent = on ? 'Working...' : label; }
+  function failed(out, btn, label) { return err => { busy(btn, false, label); out.replaceChildren(box('bad', [String(err && err.message || err)])); }; }
+  function showCheck(r) {
+    const out = $('checkOut');
+    out.replaceChildren();
+    if (r.problems.length) out.appendChild(box('bad', r.problems));
+    if (r.warnings.length) out.appendChild(box('warn', r.warnings));
+    if (!r.problems.length) out.appendChild(box('good', [
+      'Board reached and the secret matches.',
+      'On the board: ' + r.boardCount + (r.boardCount === 1 ? ' person.' : ' people.'),
+      'In the sheet: ' + r.sheetPeople.length + ' (' + r.sheetPeople.join(', ') + ').'
+    ]));
+  }
+  google.script.run.withSuccessHandler(s => {
+    s.tabs.forEach(t => { const o = document.createElement('option'); o.value = t.gid; o.textContent = t.name; $('tab').appendChild(o); });
+    if (s.tabGid !== null) $('tab').value = s.tabGid;
+    $('url').value = s.url;
+    if (s.secretSet) $('secretHint').textContent = 'A secret is saved. Leave this empty to keep it.';
+    if (s.triggers) $('checkOut').replaceChildren(box('good', ['The sync is installed here (' + s.triggers + ' triggers). Installing again replaces them; it never doubles them.']));
+    if (s.triggersOwner) $('checkOut').replaceChildren(box('warn', ['The sync is installed here by ' + s.triggersOwner + '. Only they can install it again.']));
+    if (s.otherSheet) $('checkOut').replaceChildren(box('warn', ['This script was set up for another spreadsheet. Installing here moves it to this one.']));
+  }).wizardState();
+  $('show').onclick = () => {
+    const hide = $('secret').type === 'text';
+    $('secret').type = hide ? 'password' : 'text';
+    $('show').textContent = hide ? 'Show' : 'Hide';
+  };
+  ['tab', 'url', 'secret'].forEach(id => $(id).addEventListener('input', () => $('installBox').classList.add('hidden')));
+  $('check').onclick = () => {
+    busy($('check'), true);
+    google.script.run.withFailureHandler(failed($('checkOut'), $('check'), 'Check')).withSuccessHandler(r => {
+      busy($('check'), false, 'Check');
+      showCheck(r);
+      $('installBox').classList.toggle('hidden', r.problems.length > 0);
+      $('boardOnlyTick').classList.toggle('hidden', !r.boardOnly.length);
+      $('addBoardOnly').checked = false;
+    }).wizardCheck(form());
+  };
+  $('install').onclick = () => {
+    busy($('install'), true);
+    google.script.run.withFailureHandler(failed($('checkOut'), $('install'), 'Install the sync')).withSuccessHandler(r => {
+      busy($('install'), false, 'Install the sync');
+      if (!r.installed) { showCheck(r); return; }
+      $('checkOut').replaceChildren(box('good', [
+        'Installed: ' + r.triggers + ' triggers, every person and input row tagged, Week total / Win-Loss formulas checked.',
+        'Sheet edits now reach the board. People in the sheet: ' + r.sheetPeople.join(', ') + '.'
+      ]));
+      $('installBox').classList.add('hidden');
+      $('after').classList.remove('hidden');
+      if (r.webAppUrl) {
+        const c = document.createElement('code');
+        c.textContent = r.webAppUrl;
+        $('urlLine').replaceChildren('Already deployed. The Web app URL is ', c);
+      }
+    }).wizardInstall(form());
+  };
+  $('status').onclick = () => {
+    busy($('status'), true);
+    google.script.run.withFailureHandler(failed($('statusOut'), $('status'), 'Check the connection')).withSuccessHandler(r => {
+      busy($('status'), false, 'Check the connection');
+      const out = $('statusOut');
+      out.replaceChildren();
+      if (r.problems.length) { out.appendChild(box('bad', r.problems)); return; }
+      const s = r.sync, bad = [];
+      if (!s.enabled) bad.push('The board is not syncing yet: SHEET_SCRIPT_URL is not set on it, or it has not restarted.');
+      if (s.lastError) bad.push('Last error on the board: ' + s.lastError);
+      if (r.twice.length) bad.push('On the board twice: ' + r.twice.join(', ') + '. Stop and see TESTING.md, "Starting over".');
+      if (s.outbox) bad.push(s.outbox + ' board change(s) still waiting to reach the sheet.');
+      const info = ['On the board: ' + r.boardPeople.length + ' (' + r.boardPeople.join(', ') + '). In the sheet: ' + r.sheetCount + '.'];
+      if (s.lastPull) info.unshift('The board last read the sheet at ' + new Date(s.lastPull * 1000).toLocaleTimeString() + '.');
+      if (bad.length) out.appendChild(box('bad', bad));
+      out.appendChild(box(bad.length ? 'warn' : 'good', (bad.length ? [] : ['The sync is running.']).concat(info)));
+    }).wizardStatus();
+  };
+</script>
+</body></html>`;
 
 // ======================= sheet model =======================
 
@@ -449,7 +783,7 @@ function changeFromKey_(model, key, ts) {
   if (!b) return null;
   if (p[0] === 's') return setupOf_(model, b);
   const ref = model.taskById[p[3]], w = model.weekByKey[p[2]];
-  if (!ref || !w) return null;
+  if (!ref || !w || ref.task.archived) return null;
   if (p[0] === 't') return targetChange_(model, b, ref.task, w, ts);
   if (p[0] === 'c') return cellChange_(model, b, ref.task, w, Number(p[4]), ts);
   return null;
@@ -458,7 +792,8 @@ function changeFromKey_(model, key, ts) {
 function snapshot_(model, since) {
   const weeks = model.weeks.filter(w => !since || w.week >= since);
   const cells = [], targets = [];
-  model.blocks.forEach(b => b.tasks.forEach(t => weeks.forEach(w => {
+  // Removed (struck) inputs keep their numbers in the sheet but aren't on the board.
+  model.blocks.forEach(b => b.tasks.filter(t => !t.archived).forEach(t => weeks.forEach(w => {
     targets.push([b.id, w.week, t.id, num_(model.cell(t.row, w.col)), stamp_(kt_(b.id, w.week, t.id))]);
     for (let d = 0; d < 7; d++) {
       cells.push([b.id, w.week, t.id, d, num_(model.cell(t.row, w.col + 1 + d)), stamp_(kc_(b.id, w.week, t.id, d))]);
@@ -618,23 +953,16 @@ function applySetup_(ch) {
     if (abc.some((v, i) => v !== cur[i])) sh.getRange(row, 1, 1, 3).setValues([abc]);
   });
 
-  // Inputs removed on the board keep their row (past weeks stay intact) but are struck through.
-  // From this week on the board no longer has them, so their day cells are cleared there too.
+  // Inputs removed on the board keep their row and every number in it, struck through, so a mistake
+  // can be undone: taking the strike off (or typing in the row) gives the board all of it back.
   model = readModel_();
   b = model.blockById[id];
   let archived = false;
-  const cw0 = currentWeek_(), cleared = [];
   b.tasks.forEach(t => {
     if (keep[t.id] || t.archived) return;
-    sh.getRange(t.row, 1, 1, 3).setFontLine('line-through');
-    sh.getRange(t.row + ':' + t.row).addDeveloperMetadata(MD.archived, '1');
-    model.weeks.filter(w => w.week >= cw0).forEach(w => {
-      cleared.push(sh.getRange(t.row, w.col + 1, 1, 7).getA1Notation());
-      for (let d = 0; d < 7; d++) setStamp_(kc_(id, w.week, t.id, d), Number(ch.ts));
-    });
+    setArchived_(sh, t.row, true);
     archived = true;
   });
-  if (cleared.length) sh.getRangeList(cleared).clearContent();
   const boardCats = {};
   cats.forEach(c => { boardCats[c.id] = true; });
   b.cats.forEach(c => {
@@ -776,6 +1104,56 @@ function setArchived_(sh, row, on) {
   const r = sh.getRange(row + ':' + row);
   r.getDeveloperMetadata().forEach(m => { if (m.getKey() === MD.archived) m.remove(); });
   if (on) r.addDeveloperMetadata(MD.archived, '1');
+}
+
+/**
+ * Brings struck rows back: the strike and the "removed" tag go, and every number and KPI in those
+ * rows is stamped `ts` and returned as changes, so the board gets all of it back (send them after
+ * the person's setup, which puts the input back on the board).
+ */
+function revive_(model, rows, ts) {
+  rows.forEach(r => setArchived_(model.sh, r, false));
+  bumpStructure_();
+  model = readModel_();
+  const changes = [];
+  rows.forEach(r => {
+    const t = model.taskAt[r], b = t && blockOf_(model, r);
+    if (!b) return; // a section: the setup brings it back
+    model.weeks.forEach(w => {
+      if (model.cell(r, w.col) !== '') {
+        setStamp_(kt_(b.id, w.week, t.id), ts);
+        changes.push(targetChange_(model, b, t, w, ts));
+      }
+      for (let d = 0; d < 7; d++) {
+        const v = model.cell(r, w.col + 1 + d);
+        if (v === '' || v === false) continue;
+        setStamp_(kc_(b.id, w.week, t.id, d), ts);
+        changes.push(cellChange_(model, b, t, w, d, ts));
+      }
+    });
+  });
+  return { model, changes };
+}
+
+/** Removed rows whose strike was taken off by hand (column A no longer struck). */
+function unstruckRows_(model) {
+  const rows = [];
+  model.blocks.forEach(b => {
+    b.tasks.forEach(t => { if (t.archived) rows.push(t.row); });
+    b.cats.forEach(c => { if (c.row && c.archived) rows.push(c.row); });
+  });
+  if (!rows.length) return [];
+  const lo = Math.min.apply(null, rows), hi = Math.max.apply(null, rows);
+  const lines = model.sh.getRange(lo, 1, hi - lo + 1, 1).getFontLines();
+  return rows.filter(r => lines[r - lo][0] !== 'line-through');
+}
+
+/** Revives the rows unstruck by hand and returns the changes for the board (setups first). */
+function unstruckChanges_(model) {
+  const gone = unstruckRows_(model);
+  if (!gone.length) return [];
+  const rv = revive_(model, gone, Date.now() - 1);
+  return noteSetups_(rv.model).concat(rv.changes); // the setup first: it puts the inputs back on the board
 }
 
 /** Last row of a section (its last input, or the section row itself). */
@@ -992,11 +1370,16 @@ function withLock_(fn, asResponse, waitMs) {
 }
 
 let SS = null;
-function spreadsheet_() { return SS || (SS = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID)); }
+// The setup wizard saves the spreadsheet and tab it was run in; CONFIG is the fallback.
+function spreadsheet_() {
+  return SS || (SS = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID') || CONFIG.SPREADSHEET_ID));
+}
+
+function tabGid_() { return Number(PropertiesService.getScriptProperties().getProperty('TAB_GID') || CONFIG.TAB_GID); }
 
 function tab_() {
-  const sh = spreadsheet_().getSheets().find(s => s.getSheetId() === CONFIG.TAB_GID);
-  if (!sh) throw new Error('tracker tab (gid ' + CONFIG.TAB_GID + ') not found');
+  const gid = tabGid_(), sh = spreadsheet_().getSheets().find(s => s.getSheetId() === gid);
+  if (!sh) throw new Error('tracker tab (gid ' + gid + ') not found');
   return sh;
 }
 
