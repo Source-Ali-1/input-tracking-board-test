@@ -96,15 +96,16 @@ function collectEdit_(rg, edited) {
   let model = readModel_();
   const now = Date.now();
   const r1 = Math.min(rg.getLastRow(), model.lastRow), c1 = Math.min(rg.getLastColumn(), Math.max(model.lastCol, 3));
-  const changes = [];
+  let changes = [];
   // Typing in a struck-through row (an input or section removed on the board) brings it back: the
-  // strike and the "removed" tag go, and the board gets the input again with what was typed.
-  let revived = false;
+  // strike and the "removed" tag go, and the board gets the input again with all its numbers.
+  const struck = [];
   for (let r = rg.getRow(); r <= r1; r++) {
     const b = blockOf_(model, r), t = model.taskAt[r], c = b && b.cats.find(x => x.row === r);
-    if ((t && t.archived) || (c && c.archived)) { setArchived_(model.sh, r, false); revived = true; }
+    if ((t && t.archived) || (c && c.archived)) struck.push(r);
   }
-  if (revived) { bumpStructure_(); model = readModel_(); }
+  const revived = struck.length > 0;
+  if (revived) { const rv = revive_(model, struck, edited - 1); model = rv.model; changes = rv.changes; }
   let structural = revived || Object.keys(NEW_SETUP).length > 0;
   for (let r = rg.getRow(); r <= r1; r++) {
     const b = blockOf_(model, r);
@@ -132,7 +133,17 @@ function collectEdit_(rg, edited) {
 
 /** Installable onChange trigger: rows inserted, deleted, moved or sorted can change a person's inputs. */
 function handleChange(e) {
-  if (!e || e.changeType === 'EDIT' || e.changeType === 'FORMAT') return;
+  if (!e || e.changeType === 'EDIT') return;
+  if (e.changeType === 'FORMAT') { // e.g. the strike taken off a removed row by hand
+    // Most formatting has nothing to do with the sync: check without the lock first, so edits never wait on it.
+    const quick = readModel_(true);
+    STAMPS = null;
+    if (!quick || !unstruckRows_(quick).length) return; // an uncached layout is left to syncTick
+    let out = [];
+    withLock_(() => { out = unstruckChanges_(readModel_()); });
+    pushToBoard_(out);
+    return;
+  }
   withLock_(() => pushToBoard_(noteSetups_(readModel_())));
 }
 
@@ -145,7 +156,10 @@ function syncTick() {
       ensureFormulas_(readModel_());
       cache.put('formulasChecked', '1', 1800);
     }
-    pushToBoard_(noteSetups_(readModel_())); // anything about people's rows that changed unnoticed
+    // A strike taken off by hand that no trigger reported (that includes the setups), else anything
+    // about people's rows that changed unnoticed.
+    const m = readModel_(), back = unstruckChanges_(m);
+    pushToBoard_(back.length ? back : noteSetups_(m));
     const sp = PropertiesService.getScriptProperties();
     const since = Number(sp.getProperty('BACKLOG_SINCE') || 0);
     if (!since) return;
@@ -769,7 +783,7 @@ function changeFromKey_(model, key, ts) {
   if (!b) return null;
   if (p[0] === 's') return setupOf_(model, b);
   const ref = model.taskById[p[3]], w = model.weekByKey[p[2]];
-  if (!ref || !w) return null;
+  if (!ref || !w || ref.task.archived) return null;
   if (p[0] === 't') return targetChange_(model, b, ref.task, w, ts);
   if (p[0] === 'c') return cellChange_(model, b, ref.task, w, Number(p[4]), ts);
   return null;
@@ -778,7 +792,8 @@ function changeFromKey_(model, key, ts) {
 function snapshot_(model, since) {
   const weeks = model.weeks.filter(w => !since || w.week >= since);
   const cells = [], targets = [];
-  model.blocks.forEach(b => b.tasks.forEach(t => weeks.forEach(w => {
+  // Removed (struck) inputs keep their numbers in the sheet but aren't on the board.
+  model.blocks.forEach(b => b.tasks.filter(t => !t.archived).forEach(t => weeks.forEach(w => {
     targets.push([b.id, w.week, t.id, num_(model.cell(t.row, w.col)), stamp_(kt_(b.id, w.week, t.id))]);
     for (let d = 0; d < 7; d++) {
       cells.push([b.id, w.week, t.id, d, num_(model.cell(t.row, w.col + 1 + d)), stamp_(kc_(b.id, w.week, t.id, d))]);
@@ -938,23 +953,16 @@ function applySetup_(ch) {
     if (abc.some((v, i) => v !== cur[i])) sh.getRange(row, 1, 1, 3).setValues([abc]);
   });
 
-  // Inputs removed on the board keep their row (past weeks stay intact) but are struck through.
-  // From this week on the board no longer has them, so their day cells are cleared there too.
+  // Inputs removed on the board keep their row and every number in it, struck through, so a mistake
+  // can be undone: taking the strike off (or typing in the row) gives the board all of it back.
   model = readModel_();
   b = model.blockById[id];
   let archived = false;
-  const cw0 = currentWeek_(), cleared = [];
   b.tasks.forEach(t => {
     if (keep[t.id] || t.archived) return;
-    sh.getRange(t.row, 1, 1, 3).setFontLine('line-through');
-    sh.getRange(t.row + ':' + t.row).addDeveloperMetadata(MD.archived, '1');
-    model.weeks.filter(w => w.week >= cw0).forEach(w => {
-      cleared.push(sh.getRange(t.row, w.col + 1, 1, 7).getA1Notation());
-      for (let d = 0; d < 7; d++) setStamp_(kc_(id, w.week, t.id, d), Number(ch.ts));
-    });
+    setArchived_(sh, t.row, true);
     archived = true;
   });
-  if (cleared.length) sh.getRangeList(cleared).clearContent();
   const boardCats = {};
   cats.forEach(c => { boardCats[c.id] = true; });
   b.cats.forEach(c => {
@@ -1096,6 +1104,56 @@ function setArchived_(sh, row, on) {
   const r = sh.getRange(row + ':' + row);
   r.getDeveloperMetadata().forEach(m => { if (m.getKey() === MD.archived) m.remove(); });
   if (on) r.addDeveloperMetadata(MD.archived, '1');
+}
+
+/**
+ * Brings struck rows back: the strike and the "removed" tag go, and every number and KPI in those
+ * rows is stamped `ts` and returned as changes, so the board gets all of it back (send them after
+ * the person's setup, which puts the input back on the board).
+ */
+function revive_(model, rows, ts) {
+  rows.forEach(r => setArchived_(model.sh, r, false));
+  bumpStructure_();
+  model = readModel_();
+  const changes = [];
+  rows.forEach(r => {
+    const t = model.taskAt[r], b = t && blockOf_(model, r);
+    if (!b) return; // a section: the setup brings it back
+    model.weeks.forEach(w => {
+      if (model.cell(r, w.col) !== '') {
+        setStamp_(kt_(b.id, w.week, t.id), ts);
+        changes.push(targetChange_(model, b, t, w, ts));
+      }
+      for (let d = 0; d < 7; d++) {
+        const v = model.cell(r, w.col + 1 + d);
+        if (v === '' || v === false) continue;
+        setStamp_(kc_(b.id, w.week, t.id, d), ts);
+        changes.push(cellChange_(model, b, t, w, d, ts));
+      }
+    });
+  });
+  return { model, changes };
+}
+
+/** Removed rows whose strike was taken off by hand (column A no longer struck). */
+function unstruckRows_(model) {
+  const rows = [];
+  model.blocks.forEach(b => {
+    b.tasks.forEach(t => { if (t.archived) rows.push(t.row); });
+    b.cats.forEach(c => { if (c.row && c.archived) rows.push(c.row); });
+  });
+  if (!rows.length) return [];
+  const lo = Math.min.apply(null, rows), hi = Math.max.apply(null, rows);
+  const lines = model.sh.getRange(lo, 1, hi - lo + 1, 1).getFontLines();
+  return rows.filter(r => lines[r - lo][0] !== 'line-through');
+}
+
+/** Revives the rows unstruck by hand and returns the changes for the board (setups first). */
+function unstruckChanges_(model) {
+  const gone = unstruckRows_(model);
+  if (!gone.length) return [];
+  const rv = revive_(model, gone, Date.now() - 1);
+  return noteSetups_(rv.model).concat(rv.changes); // the setup first: it puts the inputs back on the board
 }
 
 /** Last row of a section (its last input, or the section row itself). */

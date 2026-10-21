@@ -57,8 +57,9 @@ Then try changes in **both directions** by hand:
 | Give that new input a KPI (on the board, or in this week's Target cell in the sheet) | The KPI shows in this and the later weeks on both sides; Week total and Win / Loss work |
 | Log a few days for it on the board | They appear in the sheet; the board shows the total, progress and Win when the KPI is reached |
 | Rename an input on either side | Renamed on the other side |
-| Remove an input on the board | Its row is struck through in the sheet (past weeks keep their numbers) |
-| Type a number or a new name in that struck row | The strike goes and the input is back on the board |
+| Remove an input on the board | Its row is struck through in the sheet and keeps all its numbers, this week's too |
+| Type a number or a new name in that struck row | The strike goes and the input is back on the board with all its numbers and KPIs |
+| Remove another input on the board, then take the strike off its row by hand (Ctrl+5) | Within a minute it's back on the board with all its numbers and KPIs |
 | Look at a section heading (e.g. "Content") | It isn't counted in "x of y KPIs hit" on the board |
 | Wait 2 minutes, reload both | Still one of each person on both sides |
 
