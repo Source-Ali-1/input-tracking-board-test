@@ -22,48 +22,44 @@ You need **editor access** to the spreadsheet. The script and its triggers run a
 ## Step 0: Before you start (about 2 min)
 
 1. **Take a restore point.** In the spreadsheet, go to **File → Version history → Name current version** and call it, for example, "Before board sync". If anything goes wrong, you can restore it in one click.
-2. **Check who is on the live board.** The board imports everyone in the sheet, and anyone who is *only* on the board gets a new block at the bottom of the sheet. If the live board has test or old people you don't want in the sheet, delete them on the board first.
+2. **Check who is on the live board.** The board must be **blank**, or hold only people this sheet was already synced with (or people you want added to the sheet: the wizard asks you to confirm them). The sync matches people only by a hidden id, never by name, so someone already on the board shows up twice. The setup wizard checks this and refuses to install while it would happen.
 3. **Pick a secret,** a long random string, for example from a password manager. The script and the board must both use this exact value. It's called **the secret** below.
 
-## Step 1: Put the script in the spreadsheet (about 5 min)
+## Step 1: Ship the sync code to the board (about 3 min)
+
+1. Commit and push `sync.py`, `app.py` and `apps-script/` to `main`. Railway redeploys automatically.
+2. On the Railway service, open **Variables** and add `SYNC_SECRET` = the secret. Leave `SHEET_SCRIPT_URL` for step 3.
+3. Make sure `DATA_DIR` points at a mounted **volume**, e.g. `/data`. Otherwise the board's data and sync state are wiped on every redeploy.
+
+## Step 2: Put the script in the spreadsheet and run the setup wizard (about 5 min)
 
 1. Open the tracker, then go to **Extensions → Apps Script**.
 2. Delete what is in `Code.gs`, paste in the whole of this folder's `Code.gs`, and press **Save** (💾).
-3. Click **Project Settings** (⚙️ on the left). Under **Script properties**, add:
-   - `BOARD_URL`: the live board's URL, e.g. `https://input-tracking-board.up.railway.app` (no `/` at the end).
-   - `SYNC_SECRET`: the secret.
-4. Go back to **Editor** (`<>`). In the function dropdown at the top, choose **`installTriggers`** and click **Run**.
-   - Google asks for permission: click **Review permissions**, choose your account, then **Advanced → Go to (project name) → Allow**.
-   - This creates four triggers: on edit, on change, every minute, and Monday 00:05. It also tags every person, section and input row with a hidden id.
-   - It does **not** change anything you can see in the sheet. The first visible change is Week 8 being added (see step 4).
-5. Choose **`checkSetup`** and click **Run**. In the **Execution log** you should see:
-   - `weeks: W1 2026-08-31 @col 4, … W7 2026-10-12 @col 64`
-   - `ORLANDO rows 1-24: 4 sections, 18 inputs`, plus lines for `BONCAP` and `WILL`
-   - the board's health reply. An error here is fine until step 3 is done.
+3. Reload the spreadsheet tab. A **Board sync** menu appears next to **Help**.
+4. Choose **Board sync → Set up the sync**. Google asks for permission the first time: click **Continue**, choose your account, then **Advanced → Go to (project name) → Allow**, and open the menu again.
+5. In the sidebar, pick the tracker tab, type the board's address (e.g. `https://input-tracking-board.up.railway.app`) and the secret, and click **Check**. It shows:
+   - whether the board answers and the secret matches, with the problem in plain words if not;
+   - how many people are on the board and in the sheet;
+   - a **stop** if someone on the board is also in the sheet under another id. Delete that person on the board and click **Check** again;
+   - a **warning** for people who are only on the board. They would be added to the sheet as new blocks. Delete them on the board, or tick the box to add them.
+6. Click **Install the sync**. It saves the address, the secret and the tab as script properties, creates the four triggers (on edit, on change, every minute, Monday 00:05), tags every person, section and input row with a hidden id, and sets each input row's Week total / Win-Loss formula. Running it again replaces the triggers; it never doubles them. Triggers belong to the account that installed them, so only that person can install again (the wizard stops anyone else).
 
-## Step 2: Deploy the script as a web app (about 2 min)
+From now on, sheet edits reach the board. The board doesn't write to the sheet until step 3.
 
-1. Click **Deploy → New deployment**, then the ⚙️ next to *Select type*, then **Web app**.
+Prefer the editor? Setting the script properties `BOARD_URL`, `SYNC_SECRET` (and optionally `SPREADSHEET_ID`, `TAB_GID`) by hand and running `installTriggers` still works, but skips the checks.
+
+## Step 3: Let the board write to the sheet (about 3 min)
+
+1. In Apps Script, click **Deploy → New deployment**, then the ⚙️ next to *Select type*, then **Web app**.
 2. Set **Execute as** to **Me** and **Who has access** to **Anyone**. The script still rejects any request without the secret.
 3. Click **Deploy** and copy the **Web app URL** (it ends in `/exec`).
+4. On Railway, add the variable `SHEET_SCRIPT_URL` = that URL. Railway redeploys.
 
-## Step 3: Connect the board (about 3 min)
-
-1. **Ship the sync code to the live board:** commit and push `sync.py`, `app.py` and `apps-script/` to `main`. Railway redeploys automatically.
-2. On the Railway service, open **Variables** and add:
-
-   | Variable | Value |
-   |---|---|
-   | `SHEET_SCRIPT_URL` | the `/exec` URL from step 2 |
-   | `SYNC_SECRET` | the secret |
-
-3. Make sure `DATA_DIR` points at a mounted **volume**, e.g. `/data`. Otherwise the board's data and sync state are wiped on every redeploy.
-
-Railway redeploys. Within about a minute the board pulls the sheet, and ORLANDO, BONCAP and WILL appear with all their weeks.
+Within about a minute the board pulls the sheet, and ORLANDO, BONCAP and WILL appear with all their weeks.
 
 ## Step 4: Check it works (about 5 min)
 
-Open `https://<board>/api/sync/status`. You should see `"enabled": true`, a recent `lastPull`, `"outbox": 0` and `"lastError": null`.
+In the sidebar, click **Check the connection** (or open `https://<board>/api/sync/status`). It should say the sync is running, with a recent read of the sheet, no errors, nothing waiting, and everyone on the board once.
 
 Then try each of these:
 

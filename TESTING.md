@@ -17,9 +17,8 @@ Nothing touches the real tracker or the live board. About 20 minutes.
 **Always start from scratch: a fresh copy of the tracker and a blank board.** What the repo keeps is the code: the script (`apps-script/Code.gs`) and the board. The board's data (`data/board.sqlite3`, never in git) holds the people and ids of one particular sheet copy; reusing it with another copy makes duplicates and mismatches. A blank board takes everyone from the sheet with the sheet's own ids, so nobody is doubled.
 
 1. **Copy the sheet.** Open the **original** tracker (not a copy someone already synced), go to **File → Make a copy**, and open your copy.
-2. **Find its ids.** The copy's URL looks like `docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit#gid=<TAB_GID>`.
-3. **Add the script.** Go to **Extensions → Apps Script** and paste in `apps-script/Code.gs`. At the top, set `SPREADSHEET_ID` and `TAB_GID` to **your copy's** values.
-4. **Start a blank board on your computer.** Delete the `data` folder first if it exists from an earlier run, so the board starts with nobody on it:
+2. **Add the script.** Go to **Extensions → Apps Script**, paste in `apps-script/Code.gs` and press **Save**. You don't need to change `SPREADSHEET_ID` or `TAB_GID` at the top: the setup wizard (step 5) uses the copy it's opened in.
+3. **Start a blank board on your computer.** Delete the `data` folder first if it exists from an earlier run, so the board starts with nobody on it:
 
    ```bash
    rm -rf data
@@ -28,23 +27,22 @@ Nothing touches the real tracker or the live board. About 20 minutes.
 
    Open http://localhost:8080: it must show nobody. Don't add anyone on the board until the first sync has brought everyone over (brand-new people are fine after that).
 
-5. **Let Google reach it.** Google can't call `localhost`, so open a free tunnel in a second terminal:
+4. **Let Google reach it.** Google can't call `localhost`, so open a free tunnel in a second terminal:
 
    ```bash
    cloudflared tunnel --url http://localhost:8080
    ```
 
    It prints an `https://….trycloudflare.com` address. Keep this terminal open: closing it changes the address.
-6. **Follow [apps-script/SETUP.md](apps-script/SETUP.md) steps 1, 2 and 4,** with these changes:
-   - `BOARD_URL` = the tunnel address.
-   - Skip step 3 (Railway). Instead, restart the board with the web app URL from step 2:
+5. **Run the setup wizard.** Reload your copy of the sheet, then choose **Board sync → Set up the sync** (allow the permissions the first time and open it again). Pick the tracker tab, type the tunnel address and the same secret, and click **Check**. It must say the board has **0 people** and list everyone in your copy. Then click **Install the sync**.
+   If it shows a stop or a warning about people on the board, your board isn't blank: see "Starting over" below.
+6. **Let the board write to the sheet.** Deploy the script as a web app ([apps-script/SETUP.md](apps-script/SETUP.md) step 3, items 1 to 3), then restart the board with the web app URL:
 
-     ```bash
-     SHEET_SCRIPT_URL=<the /exec URL> SYNC_SECRET=<same secret> SYNC_INTERVAL=10 PORT=8080 python app.py
-     ```
+   ```bash
+   SHEET_SCRIPT_URL=<the /exec URL> SYNC_SECRET=<same secret> SYNC_INTERVAL=10 PORT=8080 python app.py
+   ```
 
-7. **Run `fixFormulas`** once from the Apps Script editor. It gives every input row its own Week total / Win-Loss formula.
-8. **Check it's working.** Open <http://localhost:8080>. Within about a minute, everyone in your copy appears, **once each**. `http://localhost:8080/api/sync/status` should show `"enabled": true`, `"outbox": 0` and `"lastError": null`.
+7. **Check it's working.** Within about a minute, everyone in your copy appears on <http://localhost:8080>, **once each**. In the sidebar, **Check the connection** should say the sync is running (or open `http://localhost:8080/api/sync/status`: `"enabled": true`, `"outbox": 0`, `"lastError": null`).
 
 Then try changes in **both directions** by hand:
 
@@ -90,7 +88,7 @@ To test again from scratch, or if anything looks doubled or mismatched:
 2. Stop the board and start it again with the same command as before.
 3. In Apps Script, replace all of `Code.gs` with the new `apps-script/Code.gs` and press **Save**.
 4. Go to **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The `/exec` URL stays the same.
-5. Run **`fixFormulas`** once from the function dropdown.
+5. Run **`fixFormulas`** once from the function dropdown (or run **Board sync → Set up the sync** and **Install the sync** again, which does the same).
 
 Within about a minute, the board drops any stale copies of people (for example the same person listed twice).
-Check step 8 above again to confirm it works.
+Check step 7 above again to confirm it works.
